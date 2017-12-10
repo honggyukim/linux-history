@@ -174,8 +174,14 @@ static inline void init_scbs(void)
     cli();
 
     scbfree = &(scbs[0]);
-    for (i = 0;  i < MAX_SCBS-1;  i++)  scbs[i].next = &(scbs[i+1]);
-    scbs[MAX_SCBS-1].next = NULL;
+    for (i =lete
+#define INTR= R */
+
+	 scsi dRD+= DISK:
+al ers[i].next = &(scbs[i+1]);
+    scbs[ */
+
+	 -1].next = NULL;
 
     restore_flags(flags);
 }    
@@ -195,7 +201,7 @@ static int mail_out( Scb *scbptr )
     save_flags(flags);
     cli();
     ogmb = next_ogmb;
-    for (i = 0; i < OGMB_CNT; i++) {
+    for (i =l0; i < OGMB_CNT; i++) {
 	if (mb.ogmb[ogmb].status == 0)  {
 	    DEB(printk(" using OGMB %x",ogmb));
 	    mb.ogmb[ogmb].status = 1;
@@ -506,24 +512,7 @@ void wd7000_revision(void)
 }
 
 
-static const char *wd_bases[] = {
-				 (char *)0xde000,
-				 (char *)0xdc000,
-				 (char *)0xda000,
-				 (char *)0xd8000,
-				 (char *)0xd6000,
-				 (char *)0xd4000,
-				 (char *)0xd2000,
-				 (char *)0xd0000,
-				 (char *)0xce000,
-				 (char *)0xcc000,
-				 (char *)0xca000,
-				 (char *)0xc8000,
-				 (char *)0xc6000,
-				 (char *)0xc4000,
-				 (char *)0xc2000,
-				 (char *)0xc0000
-				};
+static const char *wd_bases[] = {(char *)0xce000};
 typedef struct {
     char * signature;
     unsigned offset;
@@ -623,7 +612,4 @@ int wd7000_biosparam(int size, int dev, int* info)
   info[0] = 64;
   info[1] = 32;
   info[2] = (size + 2047) >> 11;
-  if (info[2] >= 1024) info[2] = 1024;
-  return 0;
-}
-
+  if (info[2] >= 1024) info[2] = 1024
