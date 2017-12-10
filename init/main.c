@@ -100,7 +100,7 @@ extern unsigned long scsi_dev_init(unsigned long, unsigned long);
  */
 
 #define CMOS_READ(addr) ({ \
-outb_p(0x80|addr,0x70); \
+outb_p(addr,0x70); \
 inb_p(0x71); \
 })
 
@@ -109,7 +109,11 @@ inb_p(0x71); \
 static void time_init(void)
 {
 	struct mktime time;
+	int i;
 
+	for (i = 0 ; i < 1000000 ; i++)
+		if (!(CMOS_READ(10) & 0x80))
+			break;
 	do {
 		time.sec = CMOS_READ(0);
 		time.min = CMOS_READ(2);
@@ -133,7 +137,7 @@ static unsigned long memory_start = 0; /* After mem_init, stores the */
 static unsigned long memory_end = 0;
 static unsigned long low_memory_start = 0;
 
-static char * argv_init[MAX_INIT_ARGS+2] = { "/bin/init", NULL, };
+static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
 static char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=console", NULL, };
 
 static char * argv_rc[] = { "/bin/sh", NULL };
@@ -238,9 +242,9 @@ void start_kernel(void)
 #ifdef CONFIG_SCSI
 	memory_start = scsi_dev_init(memory_start,memory_end);
 #endif
+	memory_start = inode_init(memory_start,memory_end);
 	mem_init(low_memory_start,memory_start,memory_end);
 	buffer_init();
-	inode_init();
 	time_init();
 	floppy_init();
 	sock_init();

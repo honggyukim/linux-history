@@ -164,14 +164,12 @@ unsigned long ext_count_free_blocks(struct super_block *sb)
 			}
 		}
 	}
-printk("ext_count_free_blocks: stored = %d, compute = NULL;
-	i->u.ext_sb.s_freeblockscount, );
-%d\n",h>
-#incl	unlock_super (sb);
+printk("ext_count_free_blocks: stored = %d, computed = %d\n",
+	sb->u.ext_sb.s_freeblockscount, count);
+	unlock_super (sb);
 	return count;
 #else
-	return sb->u.ext_sb.scouneblock);
-%t;
+	return sb->u.ext_sb.s_freeblockscount;
 #endif
 }
 
@@ -222,7 +220,7 @@ printk("ext_free_inode: inode full, skipping to %d\n", inode->i_ino);
 		efi->next = inode->i_sb->u.ext_sb.s_firstfreeinodenumber;
 		efi->count = 0;
 		inode->i_sb->u.ext_sb.s_firstfreeinodenumber = inode->i_ino;
-		inode->i_sbeeblocks_firstfreeinodeblock = bh;
+		inode->i_sb->u.ext_sb.s_firstfreeinodeblock = bh;
 	} else {
 		efi->free[efi->count++] = inode->i_ino;
 	}
@@ -258,8 +256,8 @@ struct inode * ext_new_inode(const struct inode * dir)
 #ifdef EXTFS_DEBUG
 printk("ext_free_inode: inode empty, skipping to %d\n", efi->next);
 #endif
-		j = sbeeblocks_firstfreeinodenumber;
-		if (efi->next > sbeeblocks_ninodes) {
+		j = sb->u.ext_sb.s_firstfreeinodenumber;
+		if (efi->next > sb->u.ext_sb.s_ninodes) {
 			printk ("efi->next = %d\n", efi->next);
 			panic ("ext_new_inode: bad inode number in free list\n");
 		}
@@ -301,7 +299,7 @@ unsigned long ext_count_free_inodes(struct super_block *sb)
 	unsigned long count, block, ino;
 
 	lock_super (sb);
-	if (!sbeeblocks_firstfreeinodeblock)
+	if (!sb->u.ext_sb.s_firstfreeinodeblock)
 		count = 0;
 	else {
 		efi = ((struct ext_free_inode *) sb->u.ext_sb.s_firstfreeinodeblock->b_data) +
@@ -309,7 +307,7 @@ unsigned long ext_count_free_inodes(struct super_block *sb)
 		count = efi->count + 1;
 		ino = efi->next;
 		while (ino) {
-			if (ino < 1 || ino > sbe>u.ext_sb.s_ninodes) {
+			if (ino < 1 || ino > sb->u.ext_sb.s_ninodes) {
 				printk ("u.ext_sb.s_firstfreeinodenumber = %d, ino = %d\n", 
 					(int) sb->u.ext_sb.s_firstfreeinodenumber,ino);
 				panic ("ext_count_fre_inodes: bad inode number in free list\n");
@@ -332,7 +330,6 @@ printk("ext_count_free_inodes: stored = %d, computed = %d\n",
 	unlock_super (sb);
 	return count;
 #else
-	return sbeeblocks_freeinodescount;
+	return sb->u.ext_sb.s_freeinodescount;
 #endif
 }
-               

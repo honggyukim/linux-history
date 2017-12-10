@@ -15,6 +15,7 @@
 #include <linux/mm.h>
 #include <linux/ptrace.h>
 #include <linux/keyboard.h>
+#include <linux/interrupt.h>
 
 /*
  * The default IO slowdown is doing 'inb()'s from 0x61, which should be
@@ -32,10 +33,15 @@ extern void ctrl_alt_del(void);
 extern void change_console(unsigned int new_console);
 
 unsigned long kbd_flags = 0;
+unsigned long kbd_dead_keys = 0;
+unsigned long kbd_prev_dead_keys = 0;
 
 struct kbd_struct kbd_table[NR_CONSOLES];
 static struct kbd_struct * kbd = kbd_table;
 static struct tty_struct * tty = NULL;
+
+static volatile unsigned char acknowledge = 0;
+static volatile unsigned char resend = 0;
 
 typedef void (*fptr)(int);
 
@@ -51,30 +57,65 @@ static unsigned int handle_diacr(unsigned int);
 
 static struct pt_regs * pt_regs;
 
+static inline void kb_wait(void)
+{
+	int i;
+
+	for (i=0; i<0x10000; i++)
+		if ((inb_p(0x64) & 0x02) == 0)
+			break;
+}
+
+/*
+ * send_cmd() sends a command byte to the keyboard.
+ */
+static inline void send_cmd(unsigned char c)
+{
+	kb_wait();
+	outb(c,0x64);
+}
+
+static inline unsigned char get_scancode(void)
+{
+	kb_wait();
+	if (inb_p(0x64) & 0x01)
+		return inb(0x60);
+	return 0;
+}
+
 static void keyboard_interrupt(int int_pt_regs)
 {
 	static unsigned char rep = 0xff;
-	unsigned char scancode, x;
+	unsigned char scancode;
 
 	pt_regs = (struct pt_regs *) int_pt_regs;
-	scancode=inb_p(0x60);
-	x=inb_p(0x61);
-	outb_p(x|0x80, 0x61);
-	outb_p(x&0x7f, 0x61);
-	if (scancode == 0xe0)
-		set_kbd_flag(KG_E0);
-	else if (scancode == 0xe1)
-		set_kbd_flag(KG_E1);
+	kbd_prev_dead_keys |= kbd_dead_keys;
+	if (!kbd_dead_keys)
+		kbd_prev_dead_keys = 0;
+	kbd_dead_keys = 0;
+	send_cmd(0xAD);
+	scancode = get_scancode();
+	if (scancode == 0xfa) {
+		acknowledge = 1;
+		goto end_kbd_intr;
+	} else if (scancode == 0xfe) {
+		resend = 1;
+		goto end_kbd_intr;
+	}
 	tty = TTY_TABLE(0);
 	kbd = kbd_table + fg_console;
 	if (vc_kbd_flag(kbd,VC_RAW)) {
 		kbd_flags = 0;
 		put_queue(scancode);
-		do_keyboard_interrupt();
-		return;
+		goto end_kbd_intr;
 	}
-	if (scancode == 0xe0 || scancode == 0xe1)
-		return;
+	if (scancode == 0xe0) {
+		set_kbd_dead(KGD_E0);
+		goto end_kbd_intr;
+	} else if (scancode == 0xe1) {
+		set_kbd_dead(KGD_E1);
+		goto end_kbd_intr;
+	}
 	/*
 	 *  The keyboard maintains its own internal caps lock and num lock
 	 *  statuses. In caps lock mode E0 AA precedes make code and E0 2A
@@ -82,31 +123,21 @@ static void keyboard_interrupt(int int_pt_regs)
 	 *  code and E0 AA follows break code. We do our own book-keeping,
 	 *  so we will just ignore these.
 	 */
-	if (kbd_flag(KG_E0) && (scancode == 0x2a || scancode == 0xaa)) {
-		clr_kbd_flag(KG_E0);
-		clr_kbd_flag(KG_E1);
-		return;
-	}
+	if (kbd_dead(KGD_E0) && (scancode == 0x2a || scancode == 0xaa))
+		goto end_kbd_intr;
 	/*
 	 *  Repeat a key only if the input buffers are empty or the
 	 *  characters get echoed locally. This makes key repeat usable
 	 *  with slow applications and unders heavy loads.
 	 */
-	if (scancode == rep) {
-		if (!(vc_kbd_flag(kbd,VC_REPEAT) && tty &&
-			   (L_ECHO(tty) ||
-			    (EMPTY(&tty->secondary) &&
-			     EMPTY(&tty->read_q))))) {
-			clr_kbd_flag(KG_E0);
-			clr_kbd_flag(KG_E1);
-			return;
-		}
-	}
+	if ((scancode != rep) || 
+	    (vc_kbd_flag(kbd,VC_REPEAT) && tty &&
+	     (L_ECHO(tty) || (EMPTY(&tty->secondary) && EMPTY(&tty->read_q)))))
+		key_table[scancode](scancode);
 	rep = scancode;
-	key_table[scancode](scancode);
+end_kbd_intr:
 	do_keyboard_interrupt();
-	clr_kbd_flag(KG_E0);
-	clr_kbd_flag(KG_E1);
+	send_cmd(0xAE);
 }
 
 static void put_queue(int ch)
@@ -147,7 +178,7 @@ static void puts_queue(char *cp)
 
 static void ctrl(int sc)
 {
-	if (kbd_flag(KG_E0))
+	if (kbd_dead(KGD_E0))
 		set_kbd_flag(KG_RCTRL);
 	else
 		set_kbd_flag(KG_LCTRL);
@@ -155,7 +186,7 @@ static void ctrl(int sc)
 
 static void alt(int sc)
 {
-	if (kbd_flag(KG_E0))
+	if (kbd_dead(KGD_E0))
 		set_kbd_flag(KG_ALTGR);
 	else
 		set_kbd_flag(KG_ALT);
@@ -163,7 +194,7 @@ static void alt(int sc)
 
 static void unctrl(int sc)
 {
-	if (kbd_flag(KG_E0))
+	if (kbd_dead(KGD_E0))
 		clr_kbd_flag(KG_RCTRL);
 	else
 		clr_kbd_flag(KG_LCTRL);
@@ -171,7 +202,7 @@ static void unctrl(int sc)
 
 static void unalt(int sc)
 {
-	if (kbd_flag(KG_E0))
+	if (kbd_dead(KGD_E0))
 		clr_kbd_flag(KG_ALTGR);
 	else {
 		clr_kbd_flag(KG_ALT);
@@ -218,6 +249,8 @@ static void uncaps(int sc)
 
 static void show_ptregs(void)
 {
+	if (!pt_regs)
+		return;
 	printk("\nEIP: %04x:%08x",0xffff & pt_regs->cs,pt_regs->eip);
 	if (pt_regs->cs & 3)
 		printk(" ESP: %04x:%08x",0xffff & pt_regs->cs,pt_regs->eip);
@@ -1167,7 +1200,7 @@ static void cursor(int sc)
 		ctrl_alt_del();
 		return;
 	}
-	if (kbd_flag(KG_E0)) {
+	if (kbd_dead(KGD_E0)) {
 		cur(sc);
 		return;
 	}
@@ -1226,7 +1259,7 @@ static void func(int sc)
 
 static void slash(int sc)
 {
-	if (!kbd_flag(KG_E0))
+	if (!kbd_dead(KGD_E0))
 		do_self(sc);
 	else if (vc_kbd_flag(kbd,VC_APPLIC))
 		applkey('Q');
@@ -1244,7 +1277,7 @@ static void star(int sc)
 
 static void enter(int sc)
 {
-	if (kbd_flag(KG_E0) && vc_kbd_flag(kbd,VC_APPLIC))
+	if (kbd_dead(KGD_E0) && vc_kbd_flag(kbd,VC_APPLIC))
 		applkey('M');
 	else {
 		put_queue(13);
@@ -1274,51 +1307,48 @@ static void none(int sc)
 }
 
 /*
- * kb_wait waits for the keyboard controller buffer to empty.
+ * send_data sends a character to the keyboard and waits
+ * for a acknowledge, possibly retrying if asked to. Returns
+ * the success status.
  */
-static void kb_wait(void)
+static int send_data(unsigned char data)
 {
+	int retries = 3;
 	int i;
 
-	for (i=0; i<0x10000; i++)
-		if ((inb(0x64)&0x02) == 0)
-			break;
+	do {
+		kb_wait();
+		acknowledge = 0;
+		resend = 0;
+		outb_p(data, 0x60);
+		for(i=0; i<0x20000; i++) {
+			inb_p(0x64);		/* just as a delay */
+			if (acknowledge)
+				return 1;
+			if (resend)
+				goto repeat;
+		}
+		return 0;
+repeat:
+	} while (retries-- > 0);
+	return 0;
 }
 
-/*
- * kb_ack waits for 0xfa to appear in port 0x60
- *
- * Suggested by Bruce Evans
- * Added by Niels Skou Olsen [NSO]
- * April 21, 1992
- *
- * Heavily inspired by kb_wait :-)
- * I don't know how much waiting actually is required,
- * but this seems to work
- */
-static void kb_ack(void)
-{
-	int i;
-
-	for(i=0; i<0x10000; i++)
-		if (inb(0x60) == 0xfa)
-			break;
-}
-
-void set_leds(void)
+static void kbd_bh(void * unused)
 {
 	static unsigned char old_leds = -1;
 	unsigned char leds = kbd_table[fg_console].flags & LED_MASK;
 
-	if (leds != old_leds) {
-		old_leds = leds;
-		kb_wait();
-		outb(0xed, 0x60);	/* set leds command */
-		kb_ack();
-		kb_wait();
-		outb(leds, 0x60);
-		kb_ack();
-	}
+	if (leds == old_leds)
+		return;
+	old_leds = leds;
+	if (!send_data(0xed) || !send_data(leds))
+		send_data(0xf4);	/* re-enable kbd if any errors */
+}
+
+void set_leds(void)
+{
+	mark_bh(KEYBOARD_BH);
 }
 
 long no_idt[2] = {0, 0};
@@ -1333,7 +1363,7 @@ void hard_reset_now(void)
 	int i, j;
 	extern unsigned long pg0[1024];
 
-	sti();
+	cli();
 /* rebooting needs to touch the page at absolute addr 0 */
 	pg0[0] = 7;
 	*((unsigned short *)0x472) = 0x1234;
@@ -1418,7 +1448,6 @@ static fptr key_table[] = {
 unsigned long kbd_init(unsigned long kmem_start)
 {
 	int i;
-	unsigned char a;
 	struct kbd_struct * kbd;
 
 	kbd = kbd_table + 0;
@@ -1427,9 +1456,8 @@ unsigned long kbd_init(unsigned long kmem_start)
 		kbd->default_flags = KBD_DEFFLAGS;
 		kbd->kbd_flags = KBDFLAGS;
 	}
+	bh_base[KEYBOARD_BH].routine = kbd_bh;
 	request_irq(KEYBOARD_IRQ,keyboard_interrupt);
-	a=inb_p(0x61);
-	outb_p(a|0x80,0x61);
-	outb_p(a,0x61);
+	keyboard_interrupt(0);
 	return kmem_start;
 }
