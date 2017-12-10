@@ -70,23 +70,11 @@ KEYBOARD = -DKBD_FINNISH -DKBDFLAGS=0
 
 SVGA_MODE=	-DSVGA_MODE=1
 
-# 
-# Edit the SOUND_SUPPORT line to suit your setup if you have configured
-# the sound driver to be in the kernel (not really there yet).
-#
-# The DSP_BUFFSIZE defines size of the DMA buffer used for PCM voice I/O. 
-# You should use one of the values 4096 (SB), 16384 (SB Pro), 32768 (PAS+) 
-# or 65536 (PAS16). The SBC_IRQ defines the IRQ line used by SoundBlaster and
-# the PAS_IRQ is the IRQ number for ProAudioSpectrum.
-#
-
-SOUND_SUPPORT = -DKERNEL_SOUNDCARD -DDSP_BUFFSIZE=16384 -DSBC_IRQ=7 -DPAS_IRQ=5
-
 #
 # standard CFLAGS
 #
 
-CFLAGS = -Wall -O6 -fomit-frame-pointer
+CFLAGS = -Wall -Wstrict-prototypes -O6 -fomit-frame-pointer
 
 ifdef CONFIG_M486
 CFLAGS := $(CFLAGS) -m486
@@ -139,6 +127,10 @@ lilo: $(CONFIGURE) Image
 config:
 	sh Configure < config.in
 	mv .config~ .config
+	$(MAKE) soundconf
+
+soundconf:
+	cd kernel/chr_drv/sound;$(MAKE) config
 
 linuxsubdirs: dummy
 	@for i in $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE)) || exit; done
@@ -147,17 +139,14 @@ tools/./version.h: tools/version.h
 
 tools/version.h: $(CONFIGURE) Makefile
 	@./makever.sh
-	@echo \#define UTS_RELEASE \"0.99.pl5-`cat .version`\" > tools/version.h
+	@echo \#define UTS_RELEASE \"0.99.pl7-`cat .version`\" > tools/version.h
 	@echo \#define UTS_VERSION \"`date +%D`\" >> tools/version.h
 	@echo \#define LINUX_COMPILE_TIME \"`date +%T`\" >> tools/version.h
 	@echo \#define LINUX_COMPILE_BY \"`whoami`\" >> tools/version.h
 	@echo \#define LINUX_COMPILE_HOST \"`hostname`\" >> tools/version.h
 
 Image: $(CONFIGURE) boot/bootsect boot/setup tools/system tools/build
-	cp tools/system system.tmp
-	$(STRIP) system.tmp
-	tools/build boot/bootsect boot/setup system.tmp $(ROOT_DEV) > Image
-	rm system.tmp
+	tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) > Image
 	sync
 
 disk: Image
@@ -200,6 +189,30 @@ boot/bootsect:	boot/bootsect.s
 	$(AS86) -o boot/bootsect.o boot/bootsect.s
 	$(LD86) -s -o boot/bootsect boot/bootsect.o
 
+zBoot/zSystem: zBoot/*.c zBoot/*.S tools/zSystem
+	cd zBoot;$(MAKE)
+
+zImage: $(CONFIGURE) boot/bootsect boot/setup zBoot/zSystem tools/build
+	tools/build boot/bootsect boot/setup zBoot/zSystem $(ROOT_DEV) > zImage
+	sync
+
+zdisk: zImage
+	dd bs=8192 if=zImage of=/dev/fd0
+
+zlilo: $(CONFIGURE) zImage
+	cat zImage > /vmlinuz
+	/etc/lilo/install
+
+
+tools/zSystem:	boot/head.o init/main.o tools/version.o linuxsubdirs
+	$(LD) $(LDFLAGS) -T 100000 -M boot/head.o init/main.o tools/version.o \
+		$(ARCHIVES) \
+		$(FILESYSTEMS) \
+		$(DRIVERS) \
+		$(MATH) \
+		$(LIBS) \
+		-o tools/zSystem > zSystem.map
+
 fs: dummy
 	$(MAKE) linuxsubdirs SUBDIRS=fs
 
@@ -210,19 +223,27 @@ kernel: dummy
 	$(MAKE) linuxsubdirs SUBDIRS=kernel
 
 clean:
+	rm -f zImage zSystem.map tools/zSystem
 	rm -f Image System.map core boot/bootsect boot/setup \
 		boot/bootsect.s boot/setup.s boot/head.s init/main.s
 	rm -f init/*.o tools/system tools/build boot/*.o tools/*.o
-	for i in $(SUBDIRS); do (cd $$i && $(MAKE) clean); done
+	for i in zBoot $(SUBDIRS); do (cd $$i && $(MAKE) clean); done
+
+mrproper: clean
+	rm -f include/linux/autoconf.h tools/version.h
+	rm -f .version .config*
+	rm -f `find . -name .depend -print`
 
 backup: clean
-	cd .. && tar cf - linux | compress - > backup.Z
+	cd .. && tar cf - linux | gzip -9 > backup.z
 	sync
 
 depend dep:
+	touch tools/version.h
 	for i in init/*.c;do echo -n "init/";$(CPP) -M $$i;done > .depend~
 	for i in tools/*.c;do echo -n "tools/";$(CPP) -M $$i;done >> .depend~
 	for i in $(SUBDIRS); do (cd $$i && $(MAKE) dep) || exit; done
+	rm -f tools/version.h
 	mv .depend~ .depend
 
 ifdef CONFIGURATION

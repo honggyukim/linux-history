@@ -174,14 +174,8 @@ static inline void init_scbs(void)
     cli();
 
     scbfree = &(scbs[0]);
-    for (i =lete
-#define INTR= R */
-
-	 scsi dRD+= DISK:
-al ers[i].next = &(scbs[i+1]);
-    scbs[ */
-
-	 -1].next = NULL;
+    for (i = 0;  i < MAX_SCBS-1;  i++)  scbs[i].next = &(scbs[i+1]);
+    scbs[MAX_SCBS-1].next = NULL;
 
     restore_flags(flags);
 }    
@@ -201,7 +195,7 @@ static int mail_out( Scb *scbptr )
     save_flags(flags);
     cli();
     ogmb = next_ogmb;
-    for (i =l0; i < OGMB_CNT; i++) {
+    for (i = 0; i < OGMB_CNT; i++) {
 	if (mb.ogmb[ogmb].status == 0)  {
 	    DEB(printk(" using OGMB %x",ogmb));
 	    mb.ogmb[ogmb].status = 1;
@@ -612,4 +606,7 @@ int wd7000_biosparam(int size, int dev, int* info)
   info[0] = 64;
   info[1] = 32;
   info[2] = (size + 2047) >> 11;
-  if (info[2] >= 1024) info[2] = 1024
+  if (info[2] >= 1024) info[2] = 1024;
+  return 0;
+}
+
