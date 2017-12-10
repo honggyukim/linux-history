@@ -89,6 +89,11 @@
  *		Michael Pall	:	Undo the last fix in tcp_read_urg() (multi URG PUSH broke rlogin).
  *		Michael Pall	:	Fix the multi URG PUSH problem in tcp_readable(), select() after URG works now.
  *		Michael Pall	:	recv(...,MSG_OOB) never blocks in the BSD api.
+ *		Alan Cox	:	Changed the semantics of sk->socket to 
+ *					fix a race and a signal problem with
+ *					accept() and async I/O.
+ *		Alan Cox	:	Relaxed the rules on tcp_sendto().
+ *		Yury Shevchuk	:	Really fixed accept() blocking problem.
  *
  *
  * To Fix:
@@ -240,7 +245,7 @@ static struct sk_buff *tcp_find_established(struct sock *s)
 		return NULL;
 	do
 	{
-		if(p->sk->state>=TCP_ESTABLISHED)
+		if(p->sk->state == TCP_ESTABLISHED || p->sk->state >= TCP_FIN_WAIT1)
 			return p;
 		p=p->next;
 	}
@@ -1227,7 +1232,7 @@ static int tcp_sendto(struct sock *sk, unsigned char *from,
 {
 	if (flags & ~(MSG_OOB|MSG_DONTROUTE))
 		return -EINVAL;
-	if (!tcp_connected(sk->state))
+	if (sk->state == TCP_CLOSE)
 		return -ENOTCONN;
 	if (addr_len < sizeof(*addr))
 		return -EINVAL;
@@ -1881,7 +1886,7 @@ static void tcp_reset(unsigned long saddr, unsigned long daddr, struct tcphdr *t
 	t1->psh = 0;
 	t1->doff = sizeof(*t1)/4;
 	tcp_send_check(t1, saddr, daddr, sizeof(*t1), NULL);
-	prot->queue_xmit(NULL, dev, buff, 1);
+	prot->queue_xmit(NULL, ndev, buff, 1);
 	tcp_statistics.TcpOutSegs++;
 }
 
@@ -2084,6 +2089,7 @@ static void tcp_conn_request(struct sock *sk, struct sk_buff *skb,
 	newsk->dummy_th.res2 = 0;
 	newsk->acked_seq = skb->h.th->seq + 1;
 	newsk->copied_seq = skb->h.th->seq;
+	newsk->socket = NULL;
 
 	/*
 	 *	Grab the ttl and tos values and use them 
@@ -2206,7 +2212,7 @@ static void tcp_conn_request(struct sock *sk, struct sk_buff *skb,
 	ptr[3] =(newsk->mtu) & 0xff;
 
 	tcp_send_check(t1, daddr, saddr, sizeof(*t1)+4, newsk);
-	newsk->prot->queue_xmit(newsk, dev, buff, 0);
+	newsk->prot->queue_xmit(newsk, ndev, buff, 0);
 
 	reset_timer(newsk, TIME_WRITE , TCP_TIMEOUT_INIT);
 	skb->sk = newsk;

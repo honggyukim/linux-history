@@ -116,8 +116,8 @@ struct page_info {
 
 extern int nr_swap_pages;
 extern int nr_free_pages;
+extern int min_free_pages;
 
-#define MAX_SECONDARY_PAGES 20
 #define NR_MEM_LISTS 6
 
 struct mem_list {
@@ -197,6 +197,7 @@ extern int do_mmap(struct file * file, unsigned long addr, unsigned long len,
 extern void merge_segments(struct vm_area_struct *);
 extern void insert_vm_struct(struct task_struct *, struct vm_area_struct *);
 extern int do_munmap(unsigned long, size_t);
+extern unsigned long get_unmapped_area(unsigned long);
 
 #define read_swap_page(nr,buf) \
 	rw_swap_page(READ,(nr),(buf))
@@ -233,7 +234,7 @@ extern unsigned short * mem_map;
 #define GFP_USER	0x02
 #define GFP_KERNEL	0x03
 #define GFP_NOBUFFER	0x04
-
+#define GFP_NFS		0x05
 
 /*
  * vm_ops not present page codes for shared memory.

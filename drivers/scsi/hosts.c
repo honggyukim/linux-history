@@ -39,10 +39,18 @@
 #include "aha1740.h"
 #endif
 
+#ifdef CONFIG_SCSI_AHA274X
+#include "aha274x.h"
+#endif
+
 #ifdef CONFIG_SCSI_BUSLOGIC
 #include "buslogic.h"
 #endif
 
+#ifdef CONFIG_SCSI_U14_34F
+#include "u14-34f.h"
+#endif
+ 
 #ifdef CONFIG_SCSI_FUTURE_DOMAIN
 #include "fdomain.h"
 #endif
@@ -116,6 +124,9 @@ Scsi_Host_Template * scsi_hosts = NULL;
 
 static Scsi_Host_Template builtin_scsi_hosts[] =
 	{
+#ifdef CONFIG_SCSI_U14_34F
+	ULTRASTOR_14_34F,
+#endif
 #ifdef CONFIG_SCSI_ULTRASTOR
 	ULTRASTOR_14F,
 #endif
@@ -131,6 +142,9 @@ static Scsi_Host_Template builtin_scsi_hosts[] =
 #endif
 #ifdef CONFIG_SCSI_AHA1740
 	AHA1740,
+#endif
+#ifdef CONFIG_SCSI_AHA274X
+	AHA274X,
 #endif
 #ifdef CONFIG_SCSI_FUTURE_DOMAIN
 	FDOMAIN_16X0,
@@ -213,9 +227,10 @@ struct Scsi_Host * scsi_register(Scsi_Host_Template * tpnt, int j){
 	printk("Register %x %x: %d\n", retval, retval->hostt, j);
 #endif
 
-	/* The next three are the default values which can be overridden
+	/* The next four are the default values which can be overridden
 	   if need be */
 	retval->this_id = tpnt->this_id;
+	retval->can_queue = tpnt->can_queue;
 	retval->sg_tablesize = tpnt->sg_tablesize;
 	retval->unchecked_isa_dma = tpnt->unchecked_isa_dma;
 

@@ -86,6 +86,11 @@ asmlinkage int sys_truncate(const char * path, unsigned int length)
 		iput(inode);
 		return -EPERM;
 	}
+	error = get_write_access(inode);
+	if (error) {
+		iput(inode);
+		return error;
+	}
 	inode->i_size = newattrs.ia_size = length;
 	if (inode->i_op && inode->i_op->truncate)
 		inode->i_op->truncate(inode);
@@ -93,6 +98,7 @@ asmlinkage int sys_truncate(const char * path, unsigned int length)
 	newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME | ATTR_MTIME;
 	inode->i_dirt = 1;
 	error = notify_change(inode, &newattrs);
+	put_write_access(inode);
 	iput(inode);
 	return error;
 }
@@ -129,6 +135,7 @@ asmlinkage int sys_utime(char * filename, struct utimbuf * times)
 	struct inode * inode;
 	long actime,modtime;
 	int error;
+	unsigned int flags = 0;
 	struct iattr newattrs;
 
 	error = namei(filename,&inode);
@@ -138,17 +145,14 @@ asmlinkage int sys_utime(char * filename, struct utimbuf * times)
 		iput(inode);
 		return -EROFS;
 	}
+	/* Don't worry, the checks are done in inode_change_ok() */
 	if (times) {
-		if ((current->fsuid != inode->i_uid) && !fsuser()) {
-			iput(inode);
-			return -EPERM;
-		}
 		actime = get_fs_long((unsigned long *) &times->actime);
 		modtime = get_fs_long((unsigned long *) &times->modtime);
 		newattrs.ia_ctime = CURRENT_TIME;
+		flags = ATTR_ATIME_SET | ATTR_MTIME_SET;
 	} else {
-		if ((current->fsuid != inode->i_uid) &&
-		    !permission(inode,MAY_WRITE)) {
+		if (!permission(inode,MAY_WRITE)) {
 			iput(inode);
 			return -EACCES;
 		}
@@ -156,7 +160,7 @@ asmlinkage int sys_utime(char * filename, struct utimbuf * times)
 	}
 	newattrs.ia_atime = actime;
 	newattrs.ia_mtime = modtime;
-	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME;
+	newattrs.ia_valid = ATTR_CTIME | ATTR_MTIME | ATTR_ATIME | flags;
 	inode->i_dirt = 1;
 	error = notify_change(inode, &newattrs);
 	iput(inode);
@@ -320,14 +324,14 @@ asmlinkage int sys_fchown(unsigned int fd, uid_t user, gid_t group)
 	/*
 	 * If the owner has been changed, remove the setuid bit
 	 */
-	if (user != inode->i_uid && inode->i_mode & S_ISUID) {
+	if (user != inode->i_uid && (inode->i_mode & S_ISUID)) {
 		newattrs.ia_mode &= ~S_ISUID;
 		newattrs.ia_valid |= ATTR_MODE;
 	}
 	/*
 	 * If the group has been changed, remove the setgid bit
 	 */
-	if (group != inode->i_gid && inode->i_mode & S_ISGID) {
+	if (group != inode->i_gid && (inode->i_mode & S_ISGID)) {
 		newattrs.ia_mode &= ~S_ISGID;
 		newattrs.ia_valid |= ATTR_MODE;
 	}
@@ -352,6 +356,7 @@ asmlinkage int sys_chown(const char * filename, uid_t user, gid_t group)
 		user = inode->i_uid;
 	if (group == (gid_t) -1)
 		group = inode->i_gid;
+	newattrs.ia_mode = inode->i_mode;
 	newattrs.ia_uid = user;
 	newattrs.ia_gid = group;
 	newattrs.ia_ctime = CURRENT_TIME;
@@ -359,15 +364,15 @@ asmlinkage int sys_chown(const char * filename, uid_t user, gid_t group)
 	/*
 	 * If the owner has been changed, remove the setuid bit
 	 */
-	if (user != inode->i_uid && inode->i_mode & S_ISUID) {
-		newattrs.ia_mode = inode->i_mode & ~S_ISUID;
+	if (user != inode->i_uid && (inode->i_mode & S_ISUID)) {
+		newattrs.ia_mode &= ~S_ISUID;
 		newattrs.ia_valid |= ATTR_MODE;
 	}
 	/*
 	 * If the group has been changed, remove the setgid bit
 	 */
-	if (group != inode->i_gid && inode->i_mode & S_ISGID) {
-		newattrs.ia_mode = inode->i_mode & ~S_ISGID;
+	if (group != inode->i_gid && (inode->i_mode & S_ISGID)) {
+		newattrs.ia_mode &= ~S_ISGID;
 		newattrs.ia_valid |= ATTR_MODE;
 	}
 	inode->i_dirt = 1;
@@ -413,6 +418,8 @@ int do_open(const char * filename,int flags,int mode)
 	if (flag & (O_TRUNC | O_CREAT))
 		flag |= 2;
 	error = open_namei(filename,flag,mode,&inode,NULL);
+	if (!error && (f->f_mode & 2))
+		error = get_write_access(inode);
 	if (error) {
 		current->files->fd[fd]=NULL;
 		f->f_count--;
@@ -428,6 +435,7 @@ int do_open(const char * filename,int flags,int mode)
 	if (f->f_op && f->f_op->open) {
 		error = f->f_op->open(inode,f);
 		if (error) {
+			if (f->f_mode & 2) put_write_access(inode);
 			iput(inode);
 			f->f_count--;
 			current->files->fd[fd]=NULL;
@@ -475,6 +483,7 @@ int close_fp(struct file *filp, unsigned int fd)
 		filp->f_op->release(inode,filp);
 	filp->f_count--;
 	filp->f_inode = NULL;
+	if (filp->f_mode & 2) put_write_access(inode);
 	iput(inode);
 	return 0;
 }

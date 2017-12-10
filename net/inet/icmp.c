@@ -24,6 +24,8 @@
  *		Alan Cox	:	Fixed the ICMP error status of net/host unreachable
  *	Gerhard Koerting	:	Fixed broadcast ping properly
  *		Ulrich Kunitz	:	Fixed ICMP timestamp reply
+ *		A.N.Kuznetsov	:	Multihoming fixes.
+ *		Laco Rusnak	:	Multihoming fixes.
  *
  * 
  *
@@ -176,8 +178,13 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, struct device *dev)
 	 *	Build Layer 2-3 headers for message back to source. 
 	 */
 
-	offset = ip_build_header(skb, dev->pa_addr, iph->saddr,
-			   &ndev, IPPROTO_ICMP, NULL, len, skb_in->ip_hdr->tos,255);
+	{ unsigned long our_addr = dev->pa_addr;
+	if (iph->daddr != our_addr && ip_chk_addr(iph->daddr) == IS_MYADDR)
+		our_addr = iph->daddr;
+	offset = ip_build_header(skb, our_addr, iph->saddr,
+			   &ndev, IPPROTO_ICMP, NULL, len,
+			   skb_in->ip_hdr->tos,255);
+	}
 
 	if (offset < 0) 
 	{
@@ -403,7 +410,7 @@ static void icmp_echo(struct icmphdr *icmph, struct sk_buff *skb, struct device 
 	/*
 	 *	Ship it out - free it when done 
 	 */
-	ip_queue_xmit((struct sock *)NULL, dev, skb2, 1);
+	ip_queue_xmit((struct sock *)NULL, ndev, skb2, 1);
 
 	/*
 	 *	Free the received frame
@@ -493,7 +500,7 @@ static void icmp_timestamp(struct icmphdr *icmph, struct sk_buff *skb, struct de
 	 *	Ship it out - free it when done 
 	 */
 
-	ip_queue_xmit((struct sock *) NULL, dev, skb2, 1);
+	ip_queue_xmit((struct sock *) NULL, ndev, skb2, 1);
 	icmp_statistics.IcmpOutTimestampReps++;
 	kfree_skb(skb, FREE_READ);
 }
@@ -576,7 +583,7 @@ static void icmp_address(struct icmphdr *icmph, struct sk_buff *skb, struct devi
 	icmphr->checksum = ip_compute_csum((unsigned char *)icmphr, len);
 
 	/* Ship it out - free it when done */
-	ip_queue_xmit((struct sock *)NULL, dev, skb2, 1);
+	ip_queue_xmit((struct sock *)NULL, ndev, skb2, 1);
 
 	skb->sk = NULL;
 	kfree_skb(skb, FREE_READ);

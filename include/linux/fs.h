@@ -178,6 +178,8 @@ struct buffer_head {
 #define ATTR_ATIME	16
 #define ATTR_MTIME	32
 #define ATTR_CTIME	64
+#define ATTR_ATIME_SET	128
+#define ATTR_MTIME_SET	256
 
 /*
  * This is the Inode Attributes structure, used for notify_change().  It
@@ -226,6 +228,7 @@ struct inode {
 	struct inode * i_mount;
 	struct socket * i_socket;
 	unsigned short i_count;
+	unsigned short i_wcount;
 	unsigned short i_flags;
 	unsigned char i_lock;
 	unsigned char i_dirt;
@@ -464,6 +467,8 @@ extern int notify_change(struct inode *, struct iattr *);
 extern int namei(const char * pathname, struct inode ** res_inode);
 extern int lnamei(const char * pathname, struct inode ** res_inode);
 extern int permission(struct inode * inode,int mask);
+extern int get_write_access(struct inode * inode);
+extern void put_write_access(struct inode * inode);
 extern int open_namei(const char * pathname, int flag, int mode,
 	struct inode ** res_inode, struct inode * base);
 extern int do_mknod(const char * filename, int mode, dev_t dev);

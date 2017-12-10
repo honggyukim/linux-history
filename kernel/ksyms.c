@@ -27,6 +27,9 @@
 #include <linux/tqueue.h>
 #include <linux/tty.h>
 #include <linux/serial.h>
+#include <linux/locks.h>
+#include <linux/string.h>
+#include <linux/delay.h>
 #ifdef CONFIG_INET
 #include <linux/net.h>
 #include <linux/netdevice.h>
@@ -44,6 +47,7 @@ extern char * ftape_big_buffer;
 extern void (*do_floppy)(void);
 #endif
 
+extern int sys_tz;
 extern int request_dma(unsigned int dmanr, char * deviceID);
 extern void free_dma(unsigned int dmanr);
 
@@ -89,6 +93,13 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	X(open_namei),
 	X(inode_setattr),
 	X(inode_change_ok),
+	X(generic_mmap),
+	X(set_blocksize),
+	X(getblk),
+	X(bread),
+	X(brelse),
+	X(ll_rw_block),
+	X(__wait_on_buffer),
 
 	/* device registration */
 	X(register_chrdev),
@@ -133,6 +144,7 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	X(bh_mask),
 	X(add_timer),
 	X(del_timer),
+	X(tq_immediate),
 
 	/* dma handling */
 	X(request_dma),
@@ -147,12 +159,18 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	X(current),
 	X(jiffies),
 	X(xtime),
+	X(loops_per_sec),
+	X(need_resched),
+	X(kill_proc),
+	X(kill_pg),
+	X(kill_sl),
 
 	/* misc */
 	X(panic),
 	X(printk),
 	X(sprintf),
 	X(vsprintf),
+	X(simple_strtoul),
 	X(system_utsname),
 	X(sys_call_table),
 
@@ -201,7 +219,19 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	X(dev_queue_xmit),
 	X(dev_base),
 #endif
-
+	/* Added to make file system as module */
+	X(set_writetime),
+	X(sys_tz),
+	X(__wait_on_super),
+	X(file_fsync),
+	X(clear_inode),
+	X(refile_buffer),
+	X(___strtok),
+	X(init_fifo),
+	X(super_blocks),
+	X(chrdev_inode_operations),
+	X(blkdev_inode_operations),
+	X(read_ahead),
 	/********************************************************
 	 * Do not add anything below this line,
 	 * as the stacked modules depend on this!

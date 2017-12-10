@@ -4,8 +4,10 @@
  *            SoundBlaster ("Pro" or "16 ASP" or compatible) cards
  *            and for "no-sound" interfaces like Lasermate and the
  *            Panasonic CI-101P.
+ *            Also for the Longshine LCS-7260 drive.
+ *            Also for the IBM "External ISA CD-Rom" drive.
  *
- *  NOTE:     This is release 2.6.
+ *  NOTE:     This is release 2.8.
  *            It works with my SbPro & drive CR-521 V2.11 from 2/92
  *            and with the new CR-562-B V0.75 on a "naked" Panasonic
  *            CI-101P interface. And vice versa. 
@@ -128,6 +130,23 @@
  *
  *  2.6  Nothing new.  
  *       
+ *  2.7  Added CDROMEJECT_SW ioctl to set the "EJECT" behavior on the fly:
+ *       0 disables, 1 enables auto-ejecting. Useful to keep the tray in
+ *       during shutdown.
+ *       
+ *  2.8  Added first support (still BETA, I need feedback or a drive) for
+ *       the Longshine LCS-7260 drives. They appear as double-speed drives
+ *       using the "old" command scheme, extended by tray control and door
+ *       lock functions.
+ *       Found (and fixed preliminary) a flaw with some multisession CDs: we
+ *       have to re-direct not only the accesses to frame 16 (the isofs
+ *       routines drive it up to max. 100), but also those to the continuation
+ *       (repetition) frames (as far as they exist - currently set fix as
+ *       16..20).
+ *       Changed default of the "JUKEBOX" define. If you use this default,
+ *       your tray will eject if you try to mount without a disk in. Next
+ *       mount command will insert the tray - so, just insert a disk. ;-)
+ *
  *  TODO
  *
  *     disk change detection
@@ -203,7 +222,7 @@
 
 #include "blk.h"
 
-#define VERSION "2.6 Eberhard Moenkeberg <emoenke@gwdg.de>"
+#define VERSION "2.8 Eberhard Moenkeberg <emoenke@gwdg.de>"
 
 #define SBPCD_DEBUG
 
@@ -219,7 +238,7 @@
 /*
  * still testing around...
  */
-#define JUKEBOX 0 /* tray control: eject tray if no disk is in */
+#define JUKEBOX 1 /* tray control: eject tray if no disk is in */
 #define EJECT 1 /* tray control: eject tray after last use */
 #define LONG_TIMING 0 /* test against timeouts with "gold" CDs on CR-521 */
 #define MANY_SESSION 0 /* this will conflict with "true" multi-session! */
@@ -303,6 +322,9 @@ static int autoprobe[] =
   0x320, 2, /* SPEA Media FX */
   0x340, 2, /* SPEA Media FX */
   0x350, 2, /* SPEA Media FX */
+/* due to incomplete address decoding of the SbPro card, these must be last */
+  0x630, 0, /* "sound card #9" (default) */
+  0x650, 0, /* "sound card #9" */
 #if 0
 /* some "hazardous" locations (ethernet cards) */
   0x330, 0, /* Lasermate, CI-101P, WDH-7001C */
@@ -310,9 +332,6 @@ static int autoprobe[] =
   0x370, 0, /* Lasermate, CI-101P */
   0x290, 1, /* Soundblaster 16 */
   0x310, 0, /* Lasermate, CI-101P, WDH-7001C */
-/* excluded due to incomplete address decoding of the SbPro card */
-  0x630, 0, /* "sound card #9" (default) */
-  0x650, 0, /* "sound card #9" */
 #endif
 };
 
@@ -390,6 +409,7 @@ static int sbpcd_debug =  (1<<DBG_INF) |
 #else
 static int sbpcd_debug =  (1<<DBG_INF) |
                           (1<<DBG_TOC) |
+                          (1<<DBG_MUL) |
                           (1<<DBG_UPC);
 #endif
 #endif
@@ -436,8 +456,9 @@ static struct wait_queue *sbp_waitq = NULL;
 
 /*==========================================================================*/
 
-static u_char drive_family[]="CR-5";
-static u_char drive_vendor[]="MATSHITA";
+static u_char drive_family[]="CR-5"; /* Panasonic CR-56x */
+static u_char lcs_family[]="LCS-"; /* Longshine LCS-7260 */
+static u_char drive_vendor[]="MATSHITA"; /* Matsushita CR-52x */
 
 static u_int response_count=0;
 static u_int flags_cmd_out;
@@ -481,6 +502,7 @@ static struct {
 
   char drive_model[4];
   char firmware_version[4];
+  char f_eject; /* auto-eject flag: 0 or 1 */
   u_char *sbp_buf; /* Pointer to internal data buffer,
                            space allocated during sbpcd_init() */
   int sbp_first_frame;  /* First frame in buffer */
@@ -503,6 +525,7 @@ static struct {
   
   u_char f_multisession;
   u_int lba_multi;
+  u_int last_redirect;
   
   u_char audio_state;
   u_int pos_audio_start;
@@ -1059,15 +1082,20 @@ static int xx_SpinUp(void)
   DPRINTF((DBG_SPI,"SBPCD: SpinUp.\n"));
   DriveStruct[d].in_SpinUp = 1;
   clr_cmdbuf();
-  if (!new_drive)
+  if (old_drive)
     {
       drvcmd[0]=0x05;
       flags_cmd_out=f_putcmd|f_respo2|f_lopsta|f_getsta|f_ResponseStatus|f_obey_p_check|f_bit1;
     }
-  else
+  else if (new_drive)
     {
       drvcmd[0]=0x02;
       flags_cmd_out=f_putcmd|f_respo2|f_ResponseStatus|f_obey_p_check;
+    }
+  else /* lcs_drive */
+    {
+      drvcmd[0]=0x0D;
+      flags_cmd_out=f_putcmd|f_respo2|f_lopsta|f_getsta|f_ResponseStatus|f_obey_p_check|f_bit1;
     }
   response_count=0;
   i=cmd_out();
@@ -1079,11 +1107,21 @@ static int yy_SpinDown(void)
 {
   int i;
 
-  if (!new_drive) return (-3);
+  if (old_drive) return (-3);
   clr_cmdbuf();
-  drvcmd[0]=0x06;
-  flags_cmd_out=f_putcmd|f_respo2|f_ResponseStatus|f_obey_p_check;
-  response_count=0;
+  if (new_drive)
+    {
+      drvcmd[0]=0x06;
+      flags_cmd_out=f_putcmd|f_respo2|f_ResponseStatus|f_obey_p_check;
+      response_count=0;
+    }
+  else /* lcs_drive */
+    {
+      drvcmd[0]=0x0D;
+      drvcmd[1]=1;
+      flags_cmd_out=f_putcmd|f_respo2|f_ResponseStatus|f_obey_p_check;
+      response_count=0;
+    }
   i=cmd_out();
   return (i);
 }
@@ -1159,7 +1197,18 @@ static int xx_SetVolume(void)
       drvcmd[6]=value1;
       flags_cmd_out=f_putcmd|f_ResponseStatus|f_obey_p_check;
     }
-  else 
+  else if (lcs_drive)
+    {
+      if ((volume0==0)||(channel0!=0)) control0 |= 0x80;
+      if ((volume1==0)||(channel1!=1)) control0 |= 0x40;
+      if (volume0|volume1) value0=0x80;
+      drvcmd[0]=0x84;
+      drvcmd[1]=0x03;
+      drvcmd[4]=control0;
+      drvcmd[5]=value0;
+      flags_cmd_out=f_putcmd|f_getsta|f_ResponseStatus|f_obey_p_check;
+    }
+  else /* old_drive, different firmware levels */
     {
       if (DriveStruct[d].drv_type>=drv_300)
 	{
@@ -1330,13 +1379,23 @@ static int yy_LockDoor(char lock)
 {
   int i;
 
-  if (!new_drive) return (0);
+  if (old_drive) return (0);
   DPRINTF((DBG_LCK,"SBPCD: yy_LockDoor: %d (drive %d)\n", lock, d));
   clr_cmdbuf();
-  drvcmd[0]=0x0C;
-  if (lock==1) drvcmd[1]=0x01;
-  flags_cmd_out=f_putcmd|f_ResponseStatus|f_obey_p_check;
-  response_count=0;
+  if (new_drive)
+    {
+      drvcmd[0]=0x0C;
+      if (lock==1) drvcmd[1]=0x01;
+      flags_cmd_out=f_putcmd|f_ResponseStatus|f_obey_p_check;
+      response_count=0;
+    }
+  else /* lcs_drive */
+    {
+      drvcmd[0]=0x0E;
+      if (lock==1) drvcmd[1]=0x01;
+      flags_cmd_out=f_putcmd|f_ResponseStatus|f_obey_p_check;
+      response_count=0;
+    }
   i=cmd_out();
   return (i);
 }
@@ -1527,7 +1586,16 @@ static int xx_TellVolume(void)
       chan0 >>= 1;
       chan1 >>= 1;
     }
-  else
+  else if (lcs_drive)
+    {
+      chan0=0;
+      chan1=1;
+      vol0=vol1=infobuf[1];
+      switches=infobuf[0];
+      if ((switches&0x80)!=0) chan0=1;
+      if ((switches&0x40)!=0) chan1=0;
+    }
+  else /* old_drive, different firmware levels */
     {
       chan0=0;
       chan1=1;
@@ -1777,7 +1845,6 @@ static int yy_CheckMultiSession(void)
 {
   int i;
 
-  DriveStruct[d].diskstate_flags &= ~multisession_bit;
   DriveStruct[d].f_multisession=0;
   clr_cmdbuf();
   if (new_drive)
@@ -1795,9 +1862,38 @@ static int yy_CheckMultiSession(void)
 	  DriveStruct[d].f_multisession=1;
 	  DriveStruct[d].lba_multi=msf2blk(make32(make16(0,infobuf[1]),
                                    make16(infobuf[2],infobuf[3])));
+	  DriveStruct[d].last_redirect=20;
+	  /* preliminary - has to get adjusted the following way:
+           *   look at the first byte of frames 17 ff. until 0xFF is seen
+           *   the frame before this one is the last continuation frame
+           */
 	}
     }
-  DriveStruct[d].diskstate_flags |= multisession_bit;
+  else if (lcs_drive)
+    {
+      drvcmd[0]=0x8C;
+      drvcmd[1]=3;
+      drvcmd[2]=1;
+      response_count=8;
+      flags_cmd_out=f_putcmd|f_ResponseStatus|f_obey_p_check;
+      i=cmd_out();
+      if (i<0) return (i);
+      DPRINTF((DBG_MUL,"SBPCD: MultiSession Info: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+	       infobuf[0], infobuf[1], infobuf[2], infobuf[3],
+	       infobuf[4], infobuf[5], infobuf[6], infobuf[7]));
+      DriveStruct[d].lba_multi=msf2blk(make32(make16(0,infobuf[5]),
+					      make16(infobuf[6],infobuf[7])));
+      if (DriveStruct[d].lba_multi>200)
+	{
+	  DPRINTF((DBG_MUL,"SBPCD: MultiSession base: %06X\n", DriveStruct[d].lba_multi));
+	  DriveStruct[d].f_multisession=1;
+	  DriveStruct[d].last_redirect=20;
+	  /* preliminary - has to get adjusted the following way:
+           *   look at the first byte of frames 17 ff. until 0xFF is seen;
+           *   the frame before this one is the last repetition frame.
+           */
+	}
+    }
   return (0);
 }
 /*==========================================================================*/
@@ -1899,6 +1995,7 @@ static int check_version(void)
   for (i=0;i<12;i++) DPRINTF((DBG_INI,"%c",infobuf[i]));
   DPRINTF((DBG_INI,"\"\n"));
 
+  DriveStruct[d].drv_type=0;
   for (i=0;i<4;i++) if (infobuf[i]!=drive_family[i]) break;
   if (i==4)
     {
@@ -1908,35 +2005,54 @@ static int check_version(void)
       DriveStruct[d].drive_model[3]='x';
       DriveStruct[d].drv_type=drv_new;
     }
-  else
+  if (!DriveStruct[d].drv_type)
     {
       for (i=0;i<8;i++) if (infobuf[i]!=drive_vendor[i]) break;
-      if (i!=8)
+      if (i==8)
 	{
-	  DPRINTF((DBG_INI,"SBPCD: check_version: error.\n"));
-	  return (-1);
+	  DriveStruct[d].drive_model[0]='2';
+	  DriveStruct[d].drive_model[1]='x';
+	  DriveStruct[d].drive_model[2]='-';
+	  DriveStruct[d].drive_model[3]='x';
+	  DriveStruct[d].drv_type=drv_old;
 	}
-      DriveStruct[d].drive_model[0]='2';
-      DriveStruct[d].drive_model[1]='x';
-      DriveStruct[d].drive_model[2]='-';
-      DriveStruct[d].drive_model[3]='x';
-      DriveStruct[d].drv_type=drv_old;
     }
-  for (j=0;j<4;j++) DriveStruct[d].firmware_version[j]=infobuf[i+j];
-  j = (DriveStruct[d].firmware_version[0] & 0x0F) * 100 +
-      (DriveStruct[d].firmware_version[2] & 0x0F) *10 +
-      (DriveStruct[d].firmware_version[3] & 0x0F);
-  if (new_drive)
+  if (!DriveStruct[d].drv_type)
     {
-      if (j<100) DriveStruct[d].drv_type=drv_099;
-      else DriveStruct[d].drv_type=drv_100;
+      for (i=0;i<4;i++) if (infobuf[i]!=lcs_family[i]) break;
+      if (i==4)
+	{
+	  DriveStruct[d].drive_model[0]=infobuf[i++];
+	  DriveStruct[d].drive_model[1]=infobuf[i++];
+	  DriveStruct[d].drive_model[2]=infobuf[i++];
+	  DriveStruct[d].drive_model[3]=infobuf[i++];
+	  DriveStruct[d].drv_type=drv_lcs;
+	}
     }
-  else if (j<200) DriveStruct[d].drv_type=drv_199;
-  else if (j<201) DriveStruct[d].drv_type=drv_200;
-  else if (j<210) DriveStruct[d].drv_type=drv_201;
-  else if (j<211) DriveStruct[d].drv_type=drv_210;
-  else if (j<300) DriveStruct[d].drv_type=drv_211;
-  else DriveStruct[d].drv_type=drv_300;
+  if (!DriveStruct[d].drv_type)
+    {
+      DPRINTF((DBG_INI,"SBPCD: check_version: error.\n"));
+      return (-1);
+    }
+  if (lcs_drive) DriveStruct[d].drv_type=drv_260; /* still needs a closer look */
+  else
+    {
+      for (j=0;j<4;j++) DriveStruct[d].firmware_version[j]=infobuf[i+j];
+      j = (DriveStruct[d].firmware_version[0] & 0x0F) * 100 +
+	(DriveStruct[d].firmware_version[2] & 0x0F) *10 +
+	  (DriveStruct[d].firmware_version[3] & 0x0F);
+      if (new_drive)
+	{
+	  if (j<100) DriveStruct[d].drv_type=drv_099;
+	  else DriveStruct[d].drv_type=drv_100;
+	}
+      else if (j<200) DriveStruct[d].drv_type=drv_199;
+      else if (j<201) DriveStruct[d].drv_type=drv_200;
+      else if (j<210) DriveStruct[d].drv_type=drv_201;
+      else if (j<211) DriveStruct[d].drv_type=drv_210;
+      else if (j<300) DriveStruct[d].drv_type=drv_211;
+      else DriveStruct[d].drv_type=drv_300;
+    }
   DPRINTF((DBG_INI,"SBPCD: check_version done.\n"));
   return (0);
 }
@@ -2311,30 +2427,47 @@ static int prepare(u_char func, u_char subfunc)
   return (0);
 }
 /*==========================================================================*/
-static int xx_PlayAudioMSF(int pos_audio_start,int pos_audio_end)
+static int xx_PlayAudio(int pos_audio_start,int pos_audio_end)
 {
-  int i;
+  int i, n;
 
   if (DriveStruct[d].audio_state==audio_playing) return (-EINVAL);
   clr_cmdbuf();
-  if (new_drive)
+  if (lcs_drive)
     {
-      drvcmd[0]=0x0E;
-      flags_cmd_out = f_putcmd | f_respo2 | f_ResponseStatus |
-                       f_obey_p_check | f_wait_if_busy;
+      drvcmd[0]=0x0A;
+      i=msf2blk(pos_audio_start);
+      n=msf2blk(pos_audio_end)+1-i;
+      drvcmd[1]=(i>>16)&0x00FF;
+      drvcmd[2]=(i>>8)&0x00FF;
+      drvcmd[3]=i&0x00FF;
+      drvcmd[4]=(n>>16)&0x00FF;
+      drvcmd[5]=(n>>8)&0x00FF;
+      drvcmd[6]=n&0x00FF;
+      flags_cmd_out = f_putcmd | f_respo2 | f_lopsta | f_getsta |
+	f_ResponseStatus | f_obey_p_check | f_wait_if_busy;
     }
   else
     {
-      drvcmd[0]=0x0B;
-      flags_cmd_out = f_putcmd | f_respo2 | f_lopsta | f_getsta |
-                       f_ResponseStatus | f_obey_p_check | f_wait_if_busy;
+      if (new_drive)
+	{
+	  drvcmd[0]=0x0E;
+	  flags_cmd_out = f_putcmd | f_respo2 | f_ResponseStatus |
+	    f_obey_p_check | f_wait_if_busy;
+	}
+      else /* old_drive */
+	{
+	  drvcmd[0]=0x0B;
+	  flags_cmd_out = f_putcmd | f_respo2 | f_lopsta | f_getsta |
+	    f_ResponseStatus | f_obey_p_check | f_wait_if_busy;
+	}
+      drvcmd[1]=(pos_audio_start>>16)&0x00FF;
+      drvcmd[2]=(pos_audio_start>>8)&0x00FF;
+      drvcmd[3]=pos_audio_start&0x00FF;
+      drvcmd[4]=(pos_audio_end>>16)&0x00FF;
+      drvcmd[5]=(pos_audio_end>>8)&0x00FF;
+      drvcmd[6]=pos_audio_end&0x00FF;
     }
-  drvcmd[1]=(pos_audio_start>>16)&0x00FF;
-  drvcmd[2]=(pos_audio_start>>8)&0x00FF;
-  drvcmd[3]=pos_audio_start&0x00FF;
-  drvcmd[4]=(pos_audio_end>>16)&0x00FF;
-  drvcmd[5]=(pos_audio_end>>8)&0x00FF;
-  drvcmd[6]=pos_audio_end&0x00FF;
   response_count=0;
   i=cmd_out();
   return (i);
@@ -2390,7 +2523,7 @@ static int sbp_status(void)
 /*==========================================================================*/
 /*==========================================================================*/
 /*
- * ioctl support, adopted from scsi/sr_ioctl.c and mcd.c
+ * ioctl support
  */
 static int sbpcd_ioctl(struct inode *inode, struct file *file, u_int cmd,
 		       u_long arg)
@@ -2484,8 +2617,8 @@ static int sbpcd_ioctl(struct inode *inode, struct file *file, u_int cmd,
                       msf.cdmsf_frame1;
       DPRINTF((DBG_IOX,"SBPCD: ioctl: CDROMPLAYMSF %08X %08X\n",
 	                       DriveStruct[d].pos_audio_start,DriveStruct[d].pos_audio_end));
-      i=xx_PlayAudioMSF(DriveStruct[d].pos_audio_start,DriveStruct[d].pos_audio_end);
-      DPRINTF((DBG_IOC,"SBPCD: ioctl: xx_PlayAudioMSF returns %d\n",i));
+      i=xx_PlayAudio(DriveStruct[d].pos_audio_start,DriveStruct[d].pos_audio_end);
+      DPRINTF((DBG_IOC,"SBPCD: ioctl: xx_PlayAudio returns %d\n",i));
 #if 0
       if (i<0) return (-EIO);
 #endif 0
@@ -2515,7 +2648,7 @@ static int sbpcd_ioctl(struct inode *inode, struct file *file, u_int cmd,
       if (ti.cdti_trk1>DriveStruct[d].n_last_track) ti.cdti_trk1=DriveStruct[d].n_last_track;
       DriveStruct[d].pos_audio_start=DriveStruct[d].TocBuffer[ti.cdti_trk0].address;
       DriveStruct[d].pos_audio_end=DriveStruct[d].TocBuffer[ti.cdti_trk1+1].address;
-      i=xx_PlayAudioMSF(DriveStruct[d].pos_audio_start,DriveStruct[d].pos_audio_end);
+      i=xx_PlayAudio(DriveStruct[d].pos_audio_start,DriveStruct[d].pos_audio_end);
 #if 0
       if (i<0) return (-EIO);
 #endif 0
@@ -2569,18 +2702,22 @@ static int sbpcd_ioctl(struct inode *inode, struct file *file, u_int cmd,
       
     case CDROMEJECT:
       DPRINTF((DBG_IOC,"SBPCD: ioctl: CDROMEJECT entered.\n"));
-      if (!new_drive) return (0);
-#if WORKMAN
-      DriveStruct[d].CD_changed=0xFF;
-      DriveStruct[d].diskstate_flags=0;
-#endif WORKMAN
+      if (old_drive) return (0);
       do i=yy_LockDoor(0);
       while (i!=0);
       DriveStruct[d].open_count=0; /* to get it locked next time again */
       i=yy_SpinDown();
       DPRINTF((DBG_IOX,"SBPCD: ioctl: yy_SpinDown returned %d.\n", i));
       if (i<0) return (-EIO);
+      DriveStruct[d].CD_changed=0xFF;
+      DriveStruct[d].diskstate_flags=0;
       DriveStruct[d].audio_state=0;
+      return (0);
+      
+    case CDROMEJECT_SW:
+      DPRINTF((DBG_IOC,"SBPCD: ioctl: CDROMEJECT_SW entered.\n"));
+      if (!new_drive) return (0);
+      DriveStruct[d].f_eject=arg;
       return (0);
       
     case CDROMVOLCTRL:   /* Volume control */
@@ -2918,7 +3055,9 @@ request_loop:
     }
 
   DPRINTF((DBG_BSZ,"SBPCD: read sector %d (%d sectors)\n", block, nsect));
+#if 0
   DPRINTF((DBG_MUL,"SBPCD: read LBA %d\n", block/4));
+#endif
 
   sbp_transfer();
   /* if we satisfied the request from the buffer, we're done. */
@@ -2994,7 +3133,7 @@ static void sbp_read_cmd(void)
     {
 #if MANY_SESSION
       DPRINTF((DBG_MUL,"SBPCD: read MSF %08X\n", blk2msf(block)));
-      if ( (DriveStruct[d].f_multisession) && (multisession_valid) )
+      if (DriveStruct[d].f_multisession)
 	{
 	  DPRINTF((DBG_MUL,"SBPCD: ManySession: use %08X for %08X (msf)\n",
 		         blk2msf(DriveStruct[d].lba_multi+block),
@@ -3002,13 +3141,14 @@ static void sbp_read_cmd(void)
 	  block=DriveStruct[d].lba_multi+block;
 	}
 #else
-      if ( (block==16) && (DriveStruct[d].f_multisession) && (multisession_valid) )
-	{
-	  DPRINTF((DBG_MUL,"SBPCD: MultiSession: use %08X for %08X (msf)\n",
-		         blk2msf(DriveStruct[d].lba_multi+16),
-                         blk2msf(block)));
-	  block=DriveStruct[d].lba_multi+16;
-	}
+      if ((block<=DriveStruct[d].last_redirect)
+	  && (DriveStruct[d].f_multisession))
+	  {
+	    DPRINTF((DBG_MUL,"SBPCD: MultiSession: use %08X for %08X (msf)\n",
+		     blk2msf(DriveStruct[d].lba_multi+block),
+		     blk2msf(block)));
+	    block=DriveStruct[d].lba_multi+block;
+	  }
 #endif MANY_SESSION
     }
 
@@ -3323,9 +3463,7 @@ static void sbpcd_release(struct inode * ip, struct file * file)
 	  do
 	    i=yy_LockDoor(0);
 	  while (i!=0);
-#if EJECT
-	  if (new_drive) yy_SpinDown();
-#endif
+	  if (DriveStruct[d].f_eject) yy_SpinDown();
 	}
     }
 }
@@ -3550,6 +3688,12 @@ unsigned long SBPCD_INIT(u_long mem_start, u_long mem_end)
       DriveStruct[d].sbp_current = 0;       /* Frame being currently read */
       DriveStruct[d].CD_changed=1;
       DriveStruct[d].frame_size=CD_FRAMESIZE;
+#if EJECT
+      if (new_drive) DriveStruct[d].f_eject=1;
+      else DriveStruct[d].f_eject=0;
+#else
+      DriveStruct[d].f_eject=0;
+#endif
 
       xx_ReadStatus();
       i=ResponseStatus();  /* returns orig. status or p_busy_new */
