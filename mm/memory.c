@@ -33,9 +33,7 @@
  * 		Idea by Alex Bligh (alex@cconcepts.co.uk)
  */
 
-#include <asm/system.h>
 #include <linux/config.h>
-
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/head.h>
@@ -45,7 +43,8 @@
 #include <linux/types.h>
 #include <linux/ptrace.h>
 #include <linux/mman.h>
-#include <linux/segment.h>
+
+#include <asm/system.h>
 #include <asm/segment.h>
 
 /*
@@ -1042,6 +1041,7 @@ bad_area:
 	if (wp_works_ok < 0 && address == TASK_SIZE && (error_code & PAGE_PRESENT)) {
 		wp_works_ok = 1;
 		pg0[0] = PAGE_SHARED;
+		invalidate();
 		printk("This processor honours the WP bit even when in supervisor mode. Good.\n");
 		return;
 	}

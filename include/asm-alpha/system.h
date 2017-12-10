@@ -2,6 +2,22 @@
 #define __ALPHA_SYSTEM_H
 
 /*
+ * System defines.. Note that this is included both from .c and .S
+ * files, so it does only defines, not any C code.
+ */
+
+/*
+ * We leave one page for the initial stack page, and one page for
+ * the initial process structure. Also, the console eats 3 MB for
+ * the initial bootloader (one of which we can reclaim later).
+ * So the initial load address is 0xfffffc0000304000UL
+ */
+#define INIT_PCB	0xfffffc0000300000
+#define INIT_STACK	0xfffffc0000302000
+#define START_ADDR	0xfffffc0000304000
+#define START_SIZE	(32*1024)
+
+/*
  * Common PAL-code
  */
 #define PAL_halt	  0
@@ -17,6 +33,12 @@
 #define PAL_wruniq	159
 #define PAL_gentrap	170
 #define PAL_nphalt	190
+
+/*
+ * VMS specific PAL-code
+ */
+#define PAL_swppal	10
+#define PAL_mfpr_vptb	41
 
 /*
  * OSF specific PAL-code
@@ -40,17 +62,9 @@
 #define PAL_rtsys	61
 #define PAL_rti		63
 
-#define invalidate_all() \
-__asm__ __volatile__( \
-	"lda $16,-2($31)\n\t" \
-	".long 51" \
-	: : :"$1", "$16", "$17", "$22","$23","$24","$25")
-
-#define invalidate() \
-__asm__ __volatile__( \
-	"lda $16,-1($31)\n\t" \
-	".long 51" \
-	: : :"$1", "$16", "$17", "$22","$23","$24","$25")
+#ifndef mb
+#define mb() __asm__ __volatile__("mb": : :"memory")
+#endif
 
 #define swpipl(__new_ipl) \
 ({ unsigned long __old_ipl; \

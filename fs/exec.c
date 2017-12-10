@@ -36,16 +36,12 @@
 #include <linux/fcntl.h>
 #include <linux/ptrace.h>
 #include <linux/user.h>
-#include <linux/segment.h>
 #include <linux/malloc.h>
-
-#include <asm/system.h>
-
 #include <linux/binfmts.h>
 #include <linux/personality.h>
 
-#include <asm/segment.h>
 #include <asm/system.h>
+#include <asm/segment.h>
 
 asmlinkage int sys_exit(int exit_code);
 asmlinkage int sys_brk(unsigned long);
@@ -374,10 +370,10 @@ static int count(char ** argv)
 	int error, i = 0;
 	char ** tmp, *p;
 
-	error = verify_area(VERIFY_READ, argv, sizeof(char *));
-	if (error)
-		return error;
-	if ((tmp = argv) != 0) {
+	if ((tmp = argv) != NULL) {
+		error = verify_area(VERIFY_READ, tmp, sizeof(char *));
+		if (error)
+			return error;
 		while ((p = (char *) get_fs_long((unsigned long *) (tmp++))) != NULL) {
 			i++;
 			error = verify_area(VERIFY_READ, p, 1);

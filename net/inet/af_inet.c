@@ -1245,12 +1245,15 @@ static int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 		case OLD_SIOCGIFHWADDR:
 		case SIOCSIFMAP:
 		case SIOCGIFMAP:
-		case SIOCDEVPRIVATE:
 		case SIOCSIFSLAVE:
 		case SIOCGIFSLAVE:
 			return(dev_ioctl(cmd,(void *) arg));
 
 		default:
+			if ((cmd >= SIOCDEVPRIVATE) &&
+			   (cmd <= (SIOCDEVPRIVATE + 15)))
+				return(dev_ioctl(cmd,(void *) arg));
+
 			if (sk->prot->ioctl==NULL) 
 				return(-EINVAL);
 			return(sk->prot->ioctl(sk, cmd, arg));

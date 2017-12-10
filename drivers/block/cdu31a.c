@@ -71,7 +71,7 @@
  * block operation is done.  Note that with 2048 byte blocks you
  * cannot execute files from the CD.
  *
- * XA compatability
+ * XA compatibility
  *
  * The driver should support XA disks for both the CDU31A and CDU33A.
  * It does this transparently, the using program doesn't need to set it.
@@ -82,7 +82,7 @@
  * has it's own minor device number, starting with 0.  The support is
  * pretty transparent, music, TOC operations, and read operations should
  * all work transparently on any session.  Note that since the driver
- * writer doesn't have a multi-session disk, this is all theoritical.
+ * writer doesn't have a multi-session disk, this is all theoretical.
  * Also, music operation will obviously only work on one session at a
  * time.
  *
@@ -673,7 +673,7 @@ get_result(unsigned char *result_buffer,
    *result_size = 2;
 
    /*
-    * 0x20 means an error occured.  Byte 2 will have the error code.
+    * 0x20 means an error occurred.  Byte 2 will have the error code.
     * Otherwise, the command succeeded, byte 2 will have the count of
     * how many more status bytes are coming.
     *
@@ -2781,7 +2781,7 @@ cdu31a_setup(char *strings,
       }
       else
       {
-	 printk("CDU31A: Unknown interface type: %s\n", strings[3]);
+	 printk("CDU31A: Unknown interface type: %s\n", strings);
       }
    }
 }

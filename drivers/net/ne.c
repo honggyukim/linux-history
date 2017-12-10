@@ -1,3 +1,4 @@
+#define rw_bugfix
 /* ne.c: A general non-shared-memory NS8390 ethernet driver for linux. */
 /*
     Written 1992-94 by Donald Becker.
@@ -402,7 +403,7 @@ ne_block_output(struct device *dev, int count,
     outb_p(0x42, nic_base + EN0_RSARLO);
     outb_p(0x00, nic_base + EN0_RSARHI);
     outb_p(E8390_RREAD+E8390_START, nic_base + NE_CMD);
-    /* Make certain that the dummy read has occured. */
+    /* Make certain that the dummy read has occurred. */
     SLOW_DOWN_IO;
     SLOW_DOWN_IO;
     SLOW_DOWN_IO;

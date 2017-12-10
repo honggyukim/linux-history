@@ -17,6 +17,8 @@
 #define dma_outb	outb
 #endif
 
+#define dma_inb		inb
+
 /*
  * NOTES about DMA transfers:
  *
@@ -251,8 +253,8 @@ static __inline__ int get_dma_residue(unsigned int dmanr)
 	/* using short to get 16-bit wrap around */
 	unsigned short count;
 
-	count = 1 + inb(io_port);
-	count += inb(io_port) << 8;
+	count = 1 + dma_inb(io_port);
+	count += dma_inb(io_port) << 8;
 	
 	return (dmanr<=3)? count : (count<<1);
 }

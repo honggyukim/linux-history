@@ -37,6 +37,7 @@
 #define IS_LOOPBACK	2		/* address is for LOOPBACK	*/
 #define IS_BROADCAST	3		/* address is a valid broadcast	*/
 #define IS_INVBCAST	4		/* Wrong netmask bcast not for us (unused)*/
+#define IS_MULTICAST	5		/* Multicast IP address */
 
 /*
  * The DEVICE structure.
@@ -138,7 +139,7 @@ struct device
 #define HAVE_SET_MAC_ADDR  		 
   int			  (*set_mac_address)(struct device *dev, void *addr);
 #define HAVE_PRIVATE_IOCTL
-  int			  (*do_ioctl)(struct device *dev, struct ifreq *ifr);
+  int			  (*do_ioctl)(struct device *dev, struct ifreq *ifr, int cmd);
 #define HAVE_SET_CONFIG
   int			  (*set_config)(struct device *dev, struct ifmap *map);
   

@@ -19,7 +19,7 @@
     The Fujitsu MB86695 datasheet.
 
 	After the initial version of this driver was written Gerry Sockins of
-	ATI provided their EEPROM configurationcode header file.
+	ATI provided their EEPROM configuration code header file.
     Thanks to NIIBE Yutaka <gniibe@mri.co.jp> for bug fixes.
 
   Bugs:
@@ -47,7 +47,7 @@ static char *version =
 #include <asm/bitops.h>
 #include <asm/io.h>
 #include <asm/dma.h>
-#include <errno.h>
+#include <linux/errno.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
