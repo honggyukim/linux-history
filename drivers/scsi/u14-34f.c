@@ -1,6 +1,10 @@
 /*
  *      u14-34f.c - Low-level SCSI driver for UltraStor 14F/34F
  *
+ *      30 Nov 1994 rev. 1.09 for linux 1.1.68
+ *          Redo i/o on target status CONDITION_GOOD for TYPE_DISK only.
+ *          Added optional support for using a single board at a time.
+ *
  *      14 Nov 1994 rev. 1.10 for linux 1.1.63
  *
  *      28 Oct 1994 rev. 1.09 for linux 1.1.58  Final BETA release.
@@ -140,6 +144,7 @@
 #define NO_DEBUG_DETECT
 #define NO_DEBUG_INTERRUPT
 #define NO_DEBUG_STATISTICS
+#define SINGLE_HOST_OPERATIONS
 
 #define MAX_TARGET 8
 #define MAX_IRQ 16
@@ -327,7 +332,7 @@ static inline int port_detect(ushort *port_base, unsigned int j,
    sh[j]->irq = irq;
    sh[j]->this_id = config_2.ha_scsi_id;
    sh[j]->can_queue = MAX_MAILBOXES;
-   sh[j]->hostt->cmd_per_lun = MAX_CMD_PER_LUN;
+   sh[j]->cmd_per_lun = MAX_CMD_PER_LUN;
    sys_mask = inb(sh[j]->io_port + REG_SYS_MASK);
    lcl_mask = inb(sh[j]->io_port + REG_LCL_MASK);
 
@@ -381,7 +386,7 @@ static inline int port_detect(ushort *port_base, unsigned int j,
           "Mbox %d, CmdLun %d, C%d.\n", BN(j), sh[j]->io_port, 
           (int)sh[j]->base, sh[j]->irq, 
           sh[j]->dma_channel, sh[j]->sg_tablesize, 
-          sh[j]->can_queue, sh[j]->hostt->cmd_per_lun,
+          sh[j]->can_queue, sh[j]->cmd_per_lun,
           sh[j]->hostt->use_clustering);
    return TRUE;
 }
@@ -412,12 +417,18 @@ int u14_34f_detect (Scsi_Host_Template * tpnt) {
       port_base++;
       }
 
+#if defined (SINGLE_HOST_OPERATIONS)
+   /* Create a circular linked list among the detected boards. */
+   if (j > 1) {
+
+      for (k = 0; k < (j - 1); k++) sh[k]->block = sh[k + 1];
+
+      sh[j - 1]->block = sh[0];
+      }
+#endif
+
    restore_flags(flags);
    return j;
-}
-
-const char *u14_34f_info(void) {
-   return driver_name;
 }
 
 static inline void build_sg_list(struct mscp *cpp, Scsi_Cmnd *SCpnt) {
@@ -506,7 +517,7 @@ int u14_34f_queuecommand(Scsi_Cmnd *SCpnt, void (*done)(Scsi_Cmnd *)) {
       cpp->data_len = SCpnt->request_bufflen;
       }
 
-   cpp->scsi_cdbs_len = COMMAND_SIZE(*(unsigned char *)SCpnt->cmnd);
+   cpp->scsi_cdbs_len = SCpnt->cmd_len;
    memcpy(cpp->scsi_cdbs, SCpnt->cmnd, cpp->scsi_cdbs_len);
 
    if (wait_on_busy(sh[j]->io_port)) {
@@ -788,7 +799,7 @@ static void u14_34f_interrupt_handler(int irq) {
 
                /* If there was a bus reset, redo operation on each target */
                else if (spp->target_status == CONDITION_GOOD
-                                     && SCpnt->device->type != TYPE_TAPE
+                                     && SCpnt->device->type == TYPE_DISK
                                      && HD(j)->target_reset[SCpnt->target])
                   status = DID_BUS_BUSY << 16;
                else

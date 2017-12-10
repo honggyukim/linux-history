@@ -5,21 +5,21 @@
 #ifndef _EISA_EATA_H
 #define _EISA_EATA_H
 
-#define EATA_VERSION "1.08.00"
+#define EATA_VERSION "1.09.01"
 
 int eata_detect(Scsi_Host_Template *);
 int eata_queuecommand(Scsi_Cmnd *, void (*done)(Scsi_Cmnd *));
 int eata_abort(Scsi_Cmnd *);
-const char *eata_info(void);
 int eata_reset(Scsi_Cmnd *);
 int eata_bios_param(Disk *, int, int*);
 
 #define EATA {  NULL, /* Ptr for modules */                    \
+                NULL, /* usage count for modules */	       \
                 "EISA EATA 2.0A rev. " EATA_VERSION " by "     \
-                "Dario_Ballabio@milano.europe.dg.com.",\
+                "Dario_Ballabio@milano.europe.dg.com.",        \
                 eata_detect,	        	               \
                 NULL, /* Release */     	               \
-		eata_info,                                     \
+		NULL,	                                       \
 		NULL,    			       	       \
 		eata_queuecommand,			       \
 		eata_abort,				       \

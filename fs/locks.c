@@ -473,14 +473,18 @@ static struct file_lock *alloc_lock(struct file_lock **pos,
 	if (tmp->fl_owner != NULL)
 		panic("alloc_lock: broken free list\n");
 
-	*tmp = *fl;
-
 	tmp->fl_next = *pos;	/* insert into file's list */
 	*pos = tmp;
 
 	tmp->fl_owner = current;	/* FIXME: needed? */
 	tmp->fl_fd = fd;		/* FIXME: needed? */
 	tmp->fl_wait = NULL;
+
+	tmp->fl_type = fl->fl_type;
+	tmp->fl_whence = fl->fl_whence;
+	tmp->fl_start = fl->fl_start;
+	tmp->fl_end = fl->fl_end;
+
 	return tmp;
 }
 

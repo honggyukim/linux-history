@@ -5,21 +5,21 @@
 #define _U14_34F_H
 
 int u14_34f_detect(Scsi_Host_Template *);
-const char *u14_34f_info(void);
 int u14_34f_queuecommand(Scsi_Cmnd *, void (*done)(Scsi_Cmnd *));
 int u14_34f_abort(Scsi_Cmnd *);
 int u14_34f_reset(Scsi_Cmnd *);
 int u14_34f_biosparam(Disk *, int, int *);
 
-#define U14_34F_VERSION "1.10.01"
+#define U14_34F_VERSION "1.11.01"
 
 #define ULTRASTOR_14_34F {                                            \
                 NULL,                                                 \
+                NULL,                                                 \
                 "UltraStor 14F/34F rev. " U14_34F_VERSION " by "      \
-                "Dario_Ballabio@milano.europe.dg.com.",\
+                "Dario_Ballabio@milano.europe.dg.com.",               \
                 u14_34f_detect,                                       \
                 NULL,                                                 \
-                u14_34f_info,                                         \
+                NULL,		                                      \
                 NULL,                                                 \
                 u14_34f_queuecommand,                                 \
                 u14_34f_abort,                                        \

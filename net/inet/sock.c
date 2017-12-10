@@ -46,7 +46,7 @@
  *		Alan Cox	:	Added RCVBUF,SNDBUF size setting. It suddenly occurred to me how easy it was so...
  *		Rick Sladkey	:	Relaxed UDP rules for matching packets.
  *		C.E.Hawkins	:	IFF_PROMISC/SIOCGHWADDR support
- *	Pauline Middelink	:	Pidentd support
+ *	Pauline Middelink	:	identd support
  *		Alan Cox	:	Fixed connect() taking signals I think.
  *		Alan Cox	:	SO_LINGER supported
  *		Alan Cox	:	Error reporting fixes
@@ -383,7 +383,9 @@ unsigned long sock_wspace(struct sock *sk)
 
 void sock_wfree(struct sock *sk, struct sk_buff *skb, unsigned long size)
 {
+#ifdef CONFIG_SKB_CHECK
 	IS_SKB(skb);
+#endif
 	kfree_skbmem(skb, size);
 	if (sk) 
 	{
@@ -398,7 +400,9 @@ void sock_wfree(struct sock *sk, struct sk_buff *skb, unsigned long size)
 
 void sock_rfree(struct sock *sk, struct sk_buff *skb, unsigned long size)
 {
+#ifdef CONFIG_SKB_CHECK
 	IS_SKB(skb);
+#endif	
 	kfree_skbmem(skb, size);
 	if (sk) 
 	{

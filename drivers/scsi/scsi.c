@@ -150,6 +150,7 @@ static struct blist blacklist[] =
 				     * controller, which causes SCSI code to reset bus.*/
    {"SEAGATE", "ST296","921"},   /* Responds to all lun */
    {"SONY","CD-ROM CDU-541","4.3d"},
+   {"SONY","CD-ROM CDU-55S","1.0i"},
    {"TANDBERG","TDC 3600","U07"},  /* Locks up if polled for lun != 0 */
    {"TEAC","CD-ROM","1.06"},	/* causes failed REQUEST SENSE on lun 1 for seagate
 				 * controller, which causes SCSI code to reset bus.*/
@@ -269,8 +270,10 @@ static void scan_scsis (struct Scsi_Host * shpnt)
 	  SCmd.target = dev;
 	  SCmd.lun = lun;
 
+	  SCmd.request.sem = NULL;  /* Used for mutex if loading devices after boot */
 	  SCmd.request.dev = 0xffff; /* Mark not busy */
 	  SCmd.use_sg  = 0;
+	  SCmd.cmd_len = 0;
 	  SCmd.old_use_sg  = 0;
 	  SCmd.transfersize = 0;
 	  SCmd.underflow = 0;
@@ -316,6 +319,7 @@ static void scan_scsis (struct Scsi_Host * shpnt)
 	  scsi_cmd[5] = 0;
 	  
 	  SCmd.request.dev = 0xffff; /* Mark not busy */
+	  SCmd.cmd_len = 0;
 	  
 	  scsi_do_cmd (&SCmd,
 		       (void *)  scsi_cmd, (void *) 
@@ -462,6 +466,7 @@ static void scan_scsis (struct Scsi_Host * shpnt)
 		    scsi_cmd[5] = 0;
 		    
 		    SCmd.request.dev = 0xffff; /* Mark not busy */
+		    SCmd.cmd_len = 0;
 		    
 		    scsi_do_cmd (&SCmd,
 				 (void *)  scsi_cmd, (void *) 
@@ -527,10 +532,6 @@ static void scsi_times_out (Scsi_Cmnd * SCpnt)
 		{
 		case NORMAL_TIMEOUT:
 			if (!in_scan_scsis) {
-			      printk("scsi : aborting command due to timeout : pid %lu, scsi%d, id %d, lun %d ",
-				SCpnt->pid, SCpnt->host->host_no, (int) SCpnt->target, (int) 
-				SCpnt->lun);
-				print_command (SCpnt->cmnd);
 #ifdef DEBUG_TIMEOUT
 			  scsi_dump_status();
 #endif
@@ -572,10 +573,10 @@ Scsi_Cmnd * request_queueable (struct request * req, Scsi_Device * device)
   struct buffer_head * bh, *bhp;
 
   if (!device)
-    panic ("No device passed to allocate_device().\n");
+    panic ("No device passed to request_queueable().\n");
   
   if (req && req->dev <= 0)
-    panic("Invalid device in allocate_device");
+    panic("Invalid device in request_queueable");
   
   SCpnt =  device->host->host_queue;
     while(SCpnt){
@@ -629,6 +630,7 @@ Scsi_Cmnd * request_queueable (struct request * req, Scsi_Device * device)
   SCpnt->old_use_sg  = 0;
   SCpnt->transfersize = 0;
   SCpnt->underflow = 0;
+  SCpnt->cmd_len = 0;
   return SCpnt;
 }
 
@@ -734,6 +736,7 @@ Scsi_Cmnd * allocate_device (struct request ** reqp, Scsi_Device * device,
   SCpnt->use_sg = 0;  /* Reset the scatter-gather flag */
   SCpnt->old_use_sg  = 0;
   SCpnt->transfersize = 0;      /* No default transfer size */
+  SCpnt->cmd_len = 0;
   SCpnt->underflow = 0;         /* Do not flag underflow conditions */
   return SCpnt;
 }
@@ -832,8 +835,10 @@ static void scsi_request_sense (Scsi_Cmnd * SCpnt)
 	SCpnt->request_buffer = &SCpnt->sense_buffer;
 	SCpnt->request_bufflen = sizeof(SCpnt->sense_buffer);
 	SCpnt->use_sg = 0;
+	SCpnt->cmd_len = COMMAND_SIZE(SCpnt->cmnd[0]);
 	internal_cmnd (SCpnt);
 	SCpnt->use_sg = SCpnt->old_use_sg;
+	SCpnt->cmd_len = SCpnt->old_cmd_len;
 	}
 
 
@@ -891,6 +896,11 @@ void scsi_do_cmd (Scsi_Cmnd * SCpnt, const void *cmnd ,
 			 (host->host_busy >= host->can_queue));
 	    } else {
 	      host->host_busy++;
+	      if (host->block) {
+		struct Scsi_Host * block;
+		for(block = host->block; block != host; block = block->block)
+		  block->host_busy |= SCSI_HOST_BLOCK;
+	      }
 	      sti();
 	      break;
 	    };
@@ -924,6 +934,9 @@ void scsi_do_cmd (Scsi_Cmnd * SCpnt, const void *cmnd ,
 	SCpnt->request_buffer = buffer;
 	SCpnt->request_bufflen = bufflen;
 	SCpnt->old_use_sg = SCpnt->use_sg;
+	if (SCpnt->cmd_len == 0)
+		SCpnt->cmd_len = COMMAND_SIZE(SCpnt->cmnd[0]);
+	SCpnt->old_cmd_len = SCpnt->cmd_len;
 
 	/* Start the timer ticking.  */
 
@@ -1329,6 +1342,7 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
 			    SCpnt->request_buffer = SCpnt->buffer;
 			    SCpnt->request_bufflen = SCpnt->bufflen;
 			    SCpnt->use_sg = SCpnt->old_use_sg;
+			    SCpnt->cmd_len = SCpnt->old_cmd_len;
 			    internal_cmnd (SCpnt);
 			  };
 			break;	
@@ -1337,14 +1351,29 @@ static void scsi_done (Scsi_Cmnd * SCpnt)
 		}
 
 	if (status == FINISHED) 
-		{
-		#ifdef DEBUG
-			printk("Calling done function - at address %08x\n", SCpnt->done);
-		#endif
+	  {
+#ifdef DEBUG
+	    	printk("Calling done function - at address %08x\n", SCpnt->done);
+#endif
 		host->host_busy--; /* Indicate that we are free */
+		if (host->host_busy == 0 && host->block) {
+		  struct Scsi_Host * block;
+		  /*
+		   * Now remove the locks for all of the related hosts.
+		   */
+		  for(block = host->block; block != host; block = block->block)
+		      block->host_busy &= ~SCSI_HOST_BLOCK;
+		  /*
+		   * Now wake them up.  We do this in two separate stages to prevent
+		   * race conditions.
+		   */
+		  for(block = host->block; block != host; block = block->block)
+		      wake_up(&block->host_wait);
+		}
 		wake_up(&host->host_wait);
 		SCpnt->result = result | ((exit & 0xff) << 24);
 		SCpnt->use_sg = SCpnt->old_use_sg;
+		SCpnt->cmd_len = SCpnt->old_cmd_len;
 		SCpnt->done (SCpnt);
 		}
 
@@ -1403,6 +1432,10 @@ int scsi_abort (Scsi_Cmnd * SCpnt, int why)
 			  update_timeout(SCpnt, oldto);
 			  return 0;
 			}
+			printk("scsi : aborting command due to timeout : pid %lu, scsi%d, id %d, lun %d ",
+			       SCpnt->pid, SCpnt->host->host_no, (int) SCpnt->target, (int) 
+			       SCpnt->lun);
+			print_command (SCpnt->cmnd);
 			SCpnt->abort_reason = why;
 			switch(host->hostt->abort(SCpnt)) {
 			  /* We do not know how to abort.  Try waiting another
@@ -1778,7 +1811,7 @@ unsigned long scsi_dev_init (unsigned long memory_start,unsigned long memory_end
 	  for(sdtpnt = scsi_devicelist; sdtpnt; sdtpnt = sdtpnt->next)
 	    if(sdtpnt->attach) (*sdtpnt->attach)(SDpnt);
 	  if(SDpnt->type != -1){
-	    for(j=0;j<SDpnt->host->hostt->cmd_per_lun;j++){
+	    for(j=0;j<SDpnt->host->cmd_per_lun;j++){
 	      SCpnt = (Scsi_Cmnd *) scsi_init_malloc(sizeof(Scsi_Cmnd));
 	      SCpnt->host = SDpnt->host;
 	      SCpnt->device = SDpnt;
@@ -1787,6 +1820,8 @@ unsigned long scsi_dev_init (unsigned long memory_start,unsigned long memory_end
 	      SCpnt->request.dev = -1; /* Mark not busy */
 	      SCpnt->use_sg = 0;
 	      SCpnt->old_use_sg = 0;
+	      SCpnt->old_cmd_len = 0;
+	      SCpnt->timeout = 0;
               SCpnt->underflow = 0;
               SCpnt->transfersize = 0;
 	      SCpnt->host_scribble = NULL;
@@ -1809,13 +1844,13 @@ unsigned long scsi_dev_init (unsigned long memory_start,unsigned long memory_end
 	  if(SDpnt->type != TYPE_TAPE)
 	    dma_sectors += ((host->sg_tablesize * 
 			     sizeof(struct scatterlist) + 511) >> 9) * 
-			       host->hostt->cmd_per_lun;
+			       host->cmd_per_lun;
 	  
 	  if(host->unchecked_isa_dma &&
 	     memory_end - 1 > ISA_DMA_THRESHOLD &&
 	     SDpnt->type != TYPE_TAPE) {
 	    dma_sectors += (PAGE_SIZE >> 9) * host->sg_tablesize *
-	      host->hostt->cmd_per_lun;
+	      host->cmd_per_lun;
 	    need_isa_buffer++;
 	  };
 	};
