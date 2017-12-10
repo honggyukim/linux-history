@@ -374,8 +374,8 @@ static void scan_scsis (struct Scsi_Host * shpnt)
 		  printk("scsi: unknown type %d\n", type);
 		  print_inquiry(scsi_result);
 #endif
-#endif
 		  type = -1;
+#endif
 		}
 	      
 	      SDpnt->soft_reset = 
@@ -1804,7 +1804,7 @@ unsigned long scsi_dev_init (unsigned long memory_start,unsigned long memory_end
 			       host->hostt->cmd_per_lun;
 	  
 	  if(host->unchecked_isa_dma &&
-	     memory_end > ISA_DMA_THRESHOLD &&
+	     memory_end - 1 > ISA_DMA_THRESHOLD &&
 	     SDpnt->type != TYPE_TAPE) {
 	    dma_sectors += (PAGE_SIZE >> 9) * host->sg_tablesize *
 	      host->hostt->cmd_per_lun;

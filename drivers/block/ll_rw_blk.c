@@ -1,7 +1,8 @@
 /*
- *  linux/kernel/blk_dev/ll_rw.c
+ *  linux/drivers/block/ll_rw_blk.c
  *
  * Copyright (C) 1991, 1992 Linus Torvalds
+ * Copyright (C) 1994,      Karl Keyte: Added support for disk statistics
  */
 
 /*
@@ -125,7 +126,6 @@ int is_read_only(int dev)
 
 	major = MAJOR(dev);
 	minor = MINOR(dev);
-	if ( major == FLOPPY_MAJOR && floppy_is_wp( minor) ) return 1;
 	if (major < 0 || major >= MAX_BLKDEV) return 0;
 	return ro_bits[major][minor >> 5] & (1 << (minor & 31));
 }
@@ -149,6 +149,20 @@ void set_device_ro(int dev,int flag)
 static void add_request(struct blk_dev_struct * dev, struct request * req)
 {
 	struct request * tmp;
+	short		 disk_index;
+
+	switch (MAJOR(req->dev)) {
+		case SCSI_DISK_MAJOR:	disk_index = (MINOR(req->dev) & 0x0070) >> 4;
+					if (disk_index < 4)
+						kstat.dk_drive[disk_index]++;
+					break;
+		case HD_MAJOR:
+		case XT_DISK_MAJOR:	disk_index = (MINOR(req->dev) & 0x00C0) >> 6;
+					if (disk_index < 4)
+						kstat.dk_drive[disk_index]++;
+					break;
+		default:		break;
+	}
 
 	req->next = NULL;
 	cli();

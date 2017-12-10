@@ -25,8 +25,10 @@
 #include <linux/module.h>
 #include <linux/termios.h>
 #include <linux/tqueue.h>
+#include <linux/tty.h>
 #include <linux/serial.h>
 #ifdef CONFIG_INET
+#include <linux/net.h>
 #include <linux/netdevice.h>
 #endif
 
@@ -85,12 +87,17 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	X(namei),
 	X(lnamei),
 	X(open_namei),
+	X(inode_setattr),
+	X(inode_change_ok),
 
 	/* device registration */
 	X(register_chrdev),
 	X(unregister_chrdev),
 	X(register_blkdev),
 	X(unregister_blkdev),
+	X(tty_register_driver),
+	X(tty_unregister_driver),
+	X(tty_std_termios),
 
 	/* block device driver support */
 	X(block_read),
@@ -165,6 +172,10 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	/* Miscellaneous access points */
 	X(si_meminfo),
 
+	/* socket layer registration */
+	X(sock_register),
+	X(sock_unregister),
+
 #ifdef CONFIG_FTAPE
 	/* The next labels are needed for ftape driver.  */
 	X(ftape_big_buffer),
@@ -183,6 +194,12 @@ struct symbol_table symbol_table = { 0, 0, 0, /* for stacked module support */
 	X(dev_rint),
 	X(dev_tint),
 	X(irq2dev_map),
+	X(dev_add_pack),
+	X(dev_remove_pack),
+	X(dev_get),
+	X(dev_ioctl),
+	X(dev_queue_xmit),
+	X(dev_base),
 #endif
 
 	/********************************************************

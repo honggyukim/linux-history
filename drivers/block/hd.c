@@ -15,10 +15,8 @@
  *  Thanks to Branko Lankester, lankeste@fwi.uva.nl, who found a bug
  *  in the early extended-partition checks and added DM partitions
  *
- *  IDE IRQ-unmask & drive-id & multiple-mode code added by Mark Lord.
- *
- *  Support for BIOS drive geometry translation added by Mark Lord.
- *   -- hd.c no longer chokes on drives with "more than 16 heads".
+ *  IRQ-unmask, drive-id, multiple-mode, support for ">16 heads",
+ *  and general streamlining by mlord@bnr.ca (Mark Lord).
  */
 
 #define DEFAULT_MULT_COUNT  0	/* set to 0 to disable multiple mode at boot */
@@ -61,6 +59,9 @@ static inline unsigned char CMOS_READ(unsigned char addr)
 #define RESET_FREQ      8	/* Reset controller every 8th retry */
 #define RECAL_FREQ      4	/* Recalibrate every 4th retry */
 #define MAX_HD		2
+
+#define STAT_OK		(READY_STAT|SEEK_STAT)
+#define OK_STATUS(s)	(((s)&(STAT_OK|(BUSY_STAT|WRERR_STAT|ERR_STAT)))==STAT_OK)
 
 static void recal_intr(void);
 static void bad_rw_intr(void);
@@ -132,25 +133,82 @@ void hd_setup(char *str, int *ints)
 	NR_HD = hdind+1;
 }
 
-static int win_result(void)
+static void dump_status (char *msg, unsigned int stat)
 {
-	int i=inb_p(HD_STATUS);
+	unsigned long flags;
+	char devc;
 
-	if ((i & (BUSY_STAT | READY_STAT | WRERR_STAT | SEEK_STAT | ERR_STAT))
-		== (READY_STAT | SEEK_STAT)) {
-	        hd_error = 0;
-		return 0; /* ok */
-	}
-	printk("HD: win_result: status = 0x%02x\n",i);
-	if (i&1) {
+	devc = CURRENT ? 'a' + DEVICE_NR(CURRENT->dev) : '?';
+	save_flags (flags);
+	sti();
+	printk("hd%c: %s: status=0x%02x { ", devc, msg, stat & 0xff);
+	if (stat & BUSY_STAT)	printk("Busy ");
+	if (stat & READY_STAT)	printk("DriveReady ");
+	if (stat & WRERR_STAT)	printk("WriteFault ");
+	if (stat & SEEK_STAT)	printk("SeekComplete ");
+	if (stat & DRQ_STAT)	printk("DataRequest ");
+	if (stat & ECC_STAT)	printk("CorrectedError ");
+	if (stat & INDEX_STAT)	printk("Index ");
+	if (stat & ERR_STAT)	printk("Error ");
+	printk("}\n");
+	if ((stat & ERR_STAT) == 0) {
+		hd_error = 0;
+	} else {
 		hd_error = inb(HD_ERROR);
-		printk("HD: win_result: error = 0x%02x\n",hd_error);
-	}	
-	return 1;
+		printk("hd%c: %s: error=0x%02x { ", devc, msg, hd_error & 0xff);
+		if (hd_error & BBD_ERR)		printk("BadSector ");
+		if (hd_error & ECC_ERR)		printk("UncorrectableError ");
+		if (hd_error & ID_ERR)		printk("SectorIdNotFound ");
+		if (hd_error & ABRT_ERR)	printk("DriveStatusError ");
+		if (hd_error & TRK0_ERR)	printk("TrackZeroNotFound ");
+		if (hd_error & MARK_ERR)	printk("AddrMarkNotFound ");
+		printk("}");
+		if (hd_error & (BBD_ERR|ECC_ERR|ID_ERR|MARK_ERR)) {
+			printk(", CHS=%d/%d/%d", (inb(HD_HCYL)<<8) + inb(HD_LCYL),
+				inb(HD_CURRENT) & 0xf, inb(HD_SECTOR));
+			if (CURRENT)
+				printk(", sector=%ld", CURRENT->sector);
+		}
+		printk("\n");
+	}
+	restore_flags (flags);
 }
 
-static int controller_busy(void);
-static int status_ok(void);
+void check_status(void)
+{
+	int i = inb_p(HD_STATUS);
+
+	if (!OK_STATUS(i)) {
+		dump_status("check_status", i);
+		bad_rw_intr();
+	}
+}
+
+static int controller_busy(void)
+{
+	int retries = 100000;
+	unsigned char status;
+
+	do {
+		status = inb_p(HD_STATUS);
+	} while ((status & BUSY_STAT) && --retries);
+	return status;
+}
+
+static int status_ok(void)
+{
+	unsigned char status = inb_p(HD_STATUS);
+
+	if (status & BUSY_STAT)
+		return 1;	/* Ancient, but does it make sense??? */
+	if (status & WRERR_STAT)
+		return 0;
+	if (!(status & READY_STAT))
+		return 0;
+	if (!(status & SEEK_STAT))
+		return 0;
+	return 1;
+}
 
 static int controller_ready(unsigned int drive, unsigned int head)
 {
@@ -166,45 +224,12 @@ static int controller_ready(unsigned int drive, unsigned int head)
 	return 0;
 }
 
-static int status_ok(void)
-{
-	unsigned char status = inb_p(HD_STATUS);
-
-	if (status & BUSY_STAT)
-		return 1;
-	if (status & WRERR_STAT)
-		return 0;
-	if (!(status & READY_STAT))
-		return 0;
-	if (!(status & SEEK_STAT))
-		return 0;
-	return 1;
-}
-
-static int controller_busy(void)
-{
-	int retries = 100000;
-	unsigned char status;
-
-	do {
-		status = inb_p(HD_STATUS);
-	} while ((status & BUSY_STAT) && --retries);
-	return status;
-}
-
 static void hd_out(unsigned int drive,unsigned int nsect,unsigned int sect,
 		unsigned int head,unsigned int cyl,unsigned int cmd,
 		void (*intr_addr)(void))
 {
 	unsigned short port;
 
-#ifdef DEBUG
-	if (drive>1 || head>15) {
-		printk("bad drive mapping, trying to access drive=%d, cyl=%d, head=%d, sect=%d\n",
-			drive, cyl, head, sect);
-		panic("harddisk driver problem");
-	}
-#endif
 #if (HD_DELAY > 0)
 	while (read_timer() - last_req < HD_DELAY)
 		/* nothing */;
@@ -280,7 +305,8 @@ static void identify_intr(void)
 	if (unmask_intr[dev])
 		sti();
 	if (stat & (BUSY_STAT|ERR_STAT)) {
-		printk ("  hd%c: non-IDE device, CHS=%d%d%d\n", dev+'a',
+		printk ("  hd%c: non-IDE device, %dMB, CHS=%d/%d/%d\n", dev+'a',
+			hd_info[dev].cyl*hd_info[dev].head*hd_info[dev].sect / 2048,
 			hd_info[dev].cyl, hd_info[dev].head, hd_info[dev].sect);
 		if (id != NULL) {
 			hd_ident_info[dev] = NULL;
@@ -311,7 +337,7 @@ static void identify_intr(void)
 		/*
 		 * Early model Quantum drives go weird at this point,
 		 *   but doing a recalibrate seems to "fix" them.
-		 * (Doing a full reset confuses some newer model Quantums)
+		 * (Doing a full reset confuses some other model Quantums)
 		 */
 		if (!strncmp(id->model, "QUANTUM", 7))
 			special_op[dev] = recalibrate[dev] = 1;
@@ -331,7 +357,7 @@ static void set_multmode_intr(void)
 		sti();
 	if (stat & (BUSY_STAT|ERR_STAT)) {
 		mult_req[dev] = mult_count[dev] = 0;
-		printk ("  hd%c: set multiple mode failed\n", dev+'a');
+		dump_status("set multmode failed", stat);
 	} else {
 		if ((mult_count[dev] = mult_req[dev]))
 			printk ("  hd%c: enabled %d-sector multiple mode\n",
@@ -353,11 +379,10 @@ static int drive_busy(void)
 
 	for (i = 0; i < 500000 ; i++) {
 		c = inb_p(HD_STATUS);
-		c &= (BUSY_STAT | READY_STAT | SEEK_STAT);
-		if (c == (READY_STAT | SEEK_STAT))
+		if ((c & (BUSY_STAT | READY_STAT | SEEK_STAT)) == STAT_OK)
 			return 0;
 	}
-	printk("HD controller times out, status = 0x%02x\n",c);
+	dump_status("reset timed out", c);
 	return 1;
 }
 
@@ -370,9 +395,9 @@ static void reset_controller(void)
 	outb_p(hd_info[0].ctl & 0x0f,HD_CMD);
 	for(i = 0; i < 1000; i++) nop();
 	if (drive_busy())
-		printk("HD-controller still busy\n");
-	if ((hd_error = inb(HD_ERROR)) != 1)
-		printk("HD-controller reset failed: %02x\n",hd_error);
+		printk("hd: controller still busy\n");
+	else if ((hd_error = inb(HD_ERROR)) != 1)
+		printk("hd: controller reset failed: %02x\n",hd_error);
 }
 
 static void reset_hd(void)
@@ -384,12 +409,13 @@ repeat:
 		reset = 0;
 		i = -1;
 		reset_controller();
-	} else if (win_result()) {
-		bad_rw_intr();
+	} else {
+		check_status();
 		if (reset)
 			goto repeat;
 	}
 	if (++i < NR_HD) {
+		special_op[i] = recalibrate[i] = 1;
 		if (unmask_intr[i]) {
 			unmask_intr[i] = DEFAULT_UNMASK_INTR;
 			printk("hd%c: reset irq-unmasking to %d\n",i+'a',
@@ -413,12 +439,19 @@ repeat:
  * Ok, don't know what to do with the unexpected interrupts: on some machines
  * doing a reset and a retry seems to result in an eternal loop. Right now I
  * ignore it, and just set the timeout.
+ *
+ * On laptops (and "green" PCs), an unexpected interrupt occurs whenever the
+ * drive enters "idle", "standby", or "sleep" mode, so if the status looks
+ * "good", we just ignore the interrupt completely.
  */
 void unexpected_hd_interrupt(void)
 {
-	sti();
-	printk(KERN_DEBUG "Unexpected HD interrupt\n");
-	SET_TIMER;
+	unsigned int stat = inb_p(HD_STATUS);
+
+	if (stat & (BUSY_STAT|DRQ_STAT|ECC_STAT|ERR_STAT)) {
+		dump_status ("unexpected interrupt", stat);
+		SET_TIMER;
+	}
 }
 
 /*
@@ -435,26 +468,24 @@ static void bad_rw_intr(void)
 	dev = DEVICE_NR(CURRENT->dev);
 	if (++CURRENT->errors >= MAX_ERRORS || (hd_error & BBD_ERR)) {
 		end_request(0);
-		special_op[dev] += recalibrate[dev] = 1;
+		special_op[dev] = recalibrate[dev] = 1;
 	} else if (CURRENT->errors % RESET_FREQ == 0)
 		reset = 1;
 	else if ((hd_error & TRK0_ERR) || CURRENT->errors % RECAL_FREQ == 0)
-		special_op[dev] += recalibrate[dev] = 1;
+		special_op[dev] = recalibrate[dev] = 1;
 	/* Otherwise just retry */
 }
 
 static inline int wait_DRQ(void)
 {
-	int retries = 100000;
+	int retries = 100000, stat;
 
 	while (--retries > 0)
-		if (inb_p(HD_STATUS) & DRQ_STAT)
+		if ((stat = inb_p(HD_STATUS)) & DRQ_STAT)
 			return 0;
+	dump_status("wait_DRQ", stat);
 	return -1;
 }
-
-#define STAT_MASK (BUSY_STAT | READY_STAT | WRERR_STAT | SEEK_STAT | ERR_STAT)
-#define STAT_OK (READY_STAT | SEEK_STAT)
 
 static void read_intr(void)
 {
@@ -467,19 +498,13 @@ static void read_intr(void)
 		i = (unsigned) inb_p(HD_STATUS);
 		if (i & BUSY_STAT)
 			continue;
-		if ((i & STAT_MASK) != STAT_OK)
+		if (!OK_STATUS(i))
 			break;
 		if (i & DRQ_STAT)
 			goto ok_to_read;
 	} while (--retries > 0);
-	sti();
-	printk("hd%c: read_intr: status = 0x%02x\n",dev+'a',i);
-	if (i & ERR_STAT) {
-		hd_error = (unsigned) inb(HD_ERROR);
-		printk("hd%c: read_intr: error = 0x%02x\n",dev+'a',hd_error);
-	}
+	dump_status("read_intr", i);
 	bad_rw_intr();
-	cli();
 	hd_request();
 	return;
 ok_to_read:
@@ -496,9 +521,9 @@ ok_to_read:
 	i = (CURRENT->nr_sectors -= nsect);
 
 #ifdef DEBUG
-	printk("hd%c: read: sectors(%ld-%ld), remaining=%ld, buffer=%08lx\n",
+	printk("hd%c: read: sectors(%ld-%ld), remaining=%ld, buffer=0x%08lx\n",
 		dev+'a', CURRENT->sector, CURRENT->sector+nsect,
-		CURRENT->nr_sectors, (long) CURRENT->buffer+(nsect<<9));
+		CURRENT->nr_sectors, (unsigned long) CURRENT->buffer+(nsect<<9));
 #endif
 	if ((CURRENT->current_nr_sectors -= nsect) <= 0)
 		end_request(1);
@@ -543,7 +568,7 @@ static void multwrite_intr(void)
 
 	if (unmask_intr[dev])
 		sti();
-	if (((i = inb_p(HD_STATUS)) & STAT_MASK) == STAT_OK) {
+	if (OK_STATUS(i=inb_p(HD_STATUS))) {
 		if (i & DRQ_STAT) {
 			if (WCURRENT.nr_sectors) {
 				multwrite(dev);
@@ -565,14 +590,8 @@ static void multwrite_intr(void)
 			}
 		}
 	}
-	sti();
-	printk("hd%c: multwrite_intr: status = 0x%02x\n",dev+'a',i);
-	if (i & ERR_STAT) {
-		hd_error = (unsigned) inb(HD_ERROR);
-		printk("hd:%c multwrite_intr: error = 0x%02x\n",dev+'a',hd_error);
-	}
+	dump_status("multwrite_intr", i);
 	bad_rw_intr();
-	cli();
 	hd_request();
 }
 
@@ -587,19 +606,13 @@ static void write_intr(void)
 		i = (unsigned) inb_p(HD_STATUS);
 		if (i & BUSY_STAT)
 			continue;
-		if ((i & STAT_MASK) != STAT_OK)
+		if (!OK_STATUS(i))
 			break;
 		if ((CURRENT->nr_sectors <= 1) || (i & DRQ_STAT))
 			goto ok_to_write;
 	} while (--retries > 0);
-	sti();
-	printk("HD: write_intr: status = 0x%02x\n",i);
-	if (i & ERR_STAT) {
-		hd_error = (unsigned) inb(HD_ERROR);
-		printk("HD: write_intr: error = 0x%02x\n",hd_error);
-	}
+	dump_status("write_intr", i);
 	bad_rw_intr();
-	cli();
 	hd_request();
 	return;
 ok_to_write:
@@ -624,8 +637,7 @@ ok_to_write:
 
 static void recal_intr(void)
 {
-	if (win_result())
-		bad_rw_intr();
+	check_status();
 #if (HD_DELAY > 0)
 	last_req = read_timer();
 #endif
@@ -638,116 +650,118 @@ static void recal_intr(void)
  */
 static void hd_times_out(void)
 {
+	unsigned int dev;
+
 	DEVICE_INTR = NULL;
-	sti();
 	if (!CURRENT)
 		return;
+	disable_irq(HD_IRQ);
+	sti();
 	reset = 1;
-	printk(KERN_DEBUG "HD timeout\n");
-	cli();
+	dev = DEVICE_NR(CURRENT->dev);
+	printk("hd%c: timeout\n", dev+'a');
 	if (++CURRENT->errors >= MAX_ERRORS) {
 #ifdef DEBUG
-		printk("hd : too many errors.\n");
+		printk("hd%c: too many errors\n", dev+'a');
 #endif
 		end_request(0);
 	}
-
+	cli();
 	hd_request();
+	enable_irq(HD_IRQ);
+}
+
+int do_special_op (unsigned int dev)
+{
+	if (recalibrate[dev]) {
+		recalibrate[dev] = 0;
+		hd_out(dev,hd_info[dev].sect,0,0,0,WIN_RESTORE,&recal_intr);
+		return reset;
+	}
+	if (!identified[dev]) {
+		identified[dev]  = 1;
+		unmask_intr[dev] = DEFAULT_UNMASK_INTR;
+		mult_req[dev]    = DEFAULT_MULT_COUNT;
+		hd_out(dev,0,0,0,0,WIN_IDENTIFY,&identify_intr);
+		return reset;
+	}
+	if (mult_req[dev] != mult_count[dev]) {
+		hd_out(dev,mult_req[dev],0,0,0,WIN_SETMULT,&set_multmode_intr);
+		return reset;
+	}
+	if (hd_info[dev].head > 16) {
+		printk ("hd%c: cannot handle device with more than 16 heads - giving up\n", dev+'a');
+		end_request(0);
+	}
+	special_op[dev] = 0;
+	return 1;
 }
 
 /*
- * The driver has been modified to enable interrupts a bit more: in order to
- * do this we first (a) disable the timeout-interrupt and (b) clear the
- * device-interrupt. This way the interrupts won't mess with out code (the
- * worst that can happen is that an unexpected HD-interrupt comes in and
- * sets the "reset" variable and starts the timer)
+ * The driver enables interrupts as much as possible.  In order to do this,
+ * (a) the device-interrupt is disabled before entering hd_request(),
+ * and (b) the timeout-interrupt is disabled before the sti().
+ *
+ * Interrupts are still masked (by default) whenever we are exchanging
+ * data/cmds with a drive, because some drives seem to have very poor
+ * tolerance for latency during I/O.  For devices which don't suffer from
+ * that problem (most don't), the unmask_intr[] flag can be set to unmask
+ * other interrupts during data/cmd transfers (by defining DEFAULT_UNMASK_INTR
+ * to 1, or by using "hdparm -u1 /dev/hd?" from the shell).
  */
 static void hd_request(void)
 {
-	unsigned int block,dev;
-	unsigned int sec,head,cyl,track;
-	unsigned int nsect;
+	unsigned int dev, block, nsect, sec, track, head, cyl;
 
 	if (CURRENT && CURRENT->dev < 0) return;
-
 	if (DEVICE_INTR)
 		return;
 repeat:
 	timer_active &= ~(1<<HD_TIMER);
 	sti();
 	INIT_REQUEST;
+	if (reset) {
+		cli();
+		reset_hd();
+		return;
+	}
 	dev = MINOR(CURRENT->dev);
 	block = CURRENT->sector;
 	nsect = CURRENT->nr_sectors;
-	if (dev >= (NR_HD<<6) || block >= hd[dev].nr_sects) {
+	if (dev >= (NR_HD<<6) || block >= hd[dev].nr_sects || ((block+nsect) > hd[dev].nr_sects)) {
 #ifdef DEBUG
-		printk("hd : attempted read for sector %d past end of device at sector %d.\n",
-		   	block, hd[dev].nr_sects);
+		if (dev >= (NR_HD<<6))
+			printk("hd: bad minor number: device=0x%04x\n", CURRENT->dev);
+		else
+			printk("hd%c: bad access: block=%d, count=%d\n",
+				(CURRENT->dev>>6)+'a', block, nsect);
 #endif
 		end_request(0);
 		goto repeat;
 	}
 	block += hd[dev].start_sect;
 	dev >>= 6;
-	sec = block % hd_info[dev].sect + 1;
+	if (special_op[dev]) {
+		if (do_special_op(dev))
+			goto repeat;
+		return;
+	}
+	sec   = block % hd_info[dev].sect + 1;
 	track = block / hd_info[dev].sect;
-	head = track % hd_info[dev].head;
-	cyl = track / hd_info[dev].head;
+	head  = track % hd_info[dev].head;
+	cyl   = track / hd_info[dev].head;
 #ifdef DEBUG
-	printk("hd%c : cyl = %d, head = %d, sector = %d, buffer = %08x\n",
-		dev+'a', cyl, head, sec, CURRENT->buffer);
+	printk("hd%c: %sing: CHS=%d/%d/%d, sectors=%d, buffer=0x%08lx\n",
+		dev+'a', (CURRENT->cmd == READ)?"read":"writ",
+		cyl, head, sec, nsect, (unsigned long) CURRENT->buffer);
 #endif
 	if (!unmask_intr[dev])
 		cli();
-	if (reset) {
-		int i;
-
-		for (i=0; i < NR_HD; i++)
-			special_op[i] = recalibrate[i] = 1;
-		cli(); /* better play it safe, as resets are the last resort */
-		reset_hd();
-		return;
-	}
-	if (special_op[dev]) {	/* we use "special_op" to reduce overhead on r/w */
-		if (recalibrate[dev]) {
-			recalibrate[dev] = 0;
-			hd_out(dev,hd_info[dev].sect,0,0,0,WIN_RESTORE,&recal_intr);
-			if (reset)
-				goto repeat;
-			return;
-		}	
-		if (!identified[dev]) {
-			identified[dev]  = 1;
-			unmask_intr[dev] = DEFAULT_UNMASK_INTR;
-			mult_req[dev]    = DEFAULT_MULT_COUNT;
-			hd_out(dev,0,0,0,0,WIN_IDENTIFY,&identify_intr);
-			if (reset)
-				goto repeat;
-			return;
-		}
-		if (mult_req[dev] != mult_count[dev]) {
-			hd_out(dev,mult_req[dev],0,0,0,WIN_SETMULT,&set_multmode_intr);
-			if (reset)
-				goto repeat;
-			return;
-		}
-		if (hd_info[dev].head > 16) {
-			printk ("hd%c: cannot handle device with more than 16 heads - giving up\n", dev+'a');
-			end_request(0);
-			goto repeat;
-		}
-		--special_op[dev];
-	} /* special_op[dev] */
 	if (CURRENT->cmd == READ) {
 		unsigned int cmd = mult_count[dev] > 1 ? WIN_MULTREAD : WIN_READ;
 		hd_out(dev,nsect,sec,head,cyl,cmd,&read_intr);
 		if (reset)
 			goto repeat;
-#ifdef DEBUG
-		printk("hd%c: reading %d sectors(%ld-%ld), buffer=%08lx\n",
-			dev+'a', nsect, CURRENT->sector,
-			CURRENT->sector+nsect-1, (long) CURRENT->buffer);
-#endif
 		return;
 	}
 	if (CURRENT->cmd == WRITE) {
@@ -757,22 +771,15 @@ repeat:
 			hd_out(dev,nsect,sec,head,cyl,WIN_WRITE,&write_intr);
 		if (reset)
 			goto repeat;
-#ifdef DEBUG
-		printk("hd%c: writing %d sectors(%ld-%ld), buffer=%08lx\n",
-			dev+'a', nsect, CURRENT->sector,
-			CURRENT->sector+nsect-1, (long) CURRENT->buffer);
-#endif
 		if (wait_DRQ()) {
-			printk("hd%c: hd_request: no DRQ\n", dev+'a');
 			bad_rw_intr();
 			goto repeat;
 		}
 		if (mult_count[dev]) {
 			WCURRENT = *CURRENT;
 			multwrite(dev);
-		} else {
+		} else
 			outsw(HD_DATA,CURRENT->buffer,256);
-		}
 		return;
 	}
 	panic("unknown hd-command");
@@ -790,6 +797,7 @@ static int hd_ioctl(struct inode * inode, struct file * file,
 {
 	struct hd_geometry *loc = (struct hd_geometry *) arg;
 	int dev, err;
+	unsigned long flags;
 
 	if ((!inode) || (!inode->i_rdev))
 		return -EINVAL;
@@ -839,17 +847,22 @@ static int hd_ioctl(struct inode * inode, struct file * file,
 		case BLKRRPART: /* Re-read partition tables */
 			return revalidate_hddisk(inode->i_rdev, 1);
 
-		case HDIO_SETUNMASKINTR:
-			if (!suser()) return -EACCES;
+		case HDIO_SETUNMASKINTR:	/* obsolete */
+			printk("hd: obsolete syscall: HDIO_SETUNMASKINTR\n");
 			if (!arg)  return -EINVAL;
-			if (MINOR(inode->i_rdev) & 0x3F) return -EINVAL;
 			err = verify_area(VERIFY_READ, (long *) arg, sizeof(long));
 			if (err)
 				return err;
-			unmask_intr[dev] = get_fs_long((long *) arg);
+			arg = get_fs_long((long *) arg);
+			/* drop into HDIO_SET_UNMASKINTR */
+		case HDIO_SET_UNMASKINTR:
+			if (!suser()) return -EACCES;
+			if ((arg > 1) || (MINOR(inode->i_rdev) & 0x3F))
+				return -EINVAL;
+			unmask_intr[dev] = arg;
 			return 0;
 
-                case HDIO_GETUNMASKINTR:
+                case HDIO_GET_UNMASKINTR:
 			if (!arg)  return -EINVAL;
 			err = verify_area(VERIFY_WRITE, (long *) arg, sizeof(long));
 			if (err)
@@ -857,7 +870,7 @@ static int hd_ioctl(struct inode * inode, struct file * file,
 			put_fs_long(unmask_intr[dev], (long *) arg);
 			return 0;
 
-                case HDIO_GETMULTCOUNT:
+                case HDIO_GET_MULTCOUNT:
 			if (!arg)  return -EINVAL;
 			err = verify_area(VERIFY_WRITE, (long *) arg, sizeof(long));
 			if (err)
@@ -865,32 +878,33 @@ static int hd_ioctl(struct inode * inode, struct file * file,
 			put_fs_long(mult_count[dev], (long *) arg);
 			return 0;
 
-		case HDIO_SETMULTCOUNT:
-		{
-			unsigned long flags;
-			if (!suser()) return -EACCES;
+		case HDIO_SETMULTCOUNT:		/* obsolete */
+			printk("hd: obsolete syscall: HDIO_SETMULTCOUNT\n");
 			if (!arg)  return -EINVAL;
-			if (MINOR(inode->i_rdev) & 0x3F) return -EINVAL;
 			err = verify_area(VERIFY_READ, (long *) arg, sizeof(long));
 			if (err)
 				return err;
 			arg = get_fs_long((long *) arg);
+			/* drop into HDIO_SET_MULTCOUNT */
+		case HDIO_SET_MULTCOUNT:
+			if (!suser()) return -EACCES;
+			if (MINOR(inode->i_rdev) & 0x3F) return -EINVAL;
 			save_flags(flags);
 			cli();	/* a prior request might still be in progress */
 			if (arg > max_mult[dev])
 				err = -EINVAL;	/* out of range for device */
 			else if (mult_req[dev] != mult_count[dev]) {
-				++special_op[dev];
+				special_op[dev] = 1;
 				err = -EBUSY;	/* busy, try again */
 			} else {
 				mult_req[dev] = arg;
-				++special_op[dev];
+				special_op[dev] = 1;
 				err = 0;
 			}
 			restore_flags(flags);
 			return err;
-		}
-		case HDIO_GETIDENTITY:
+
+		case HDIO_GET_IDENTITY:
 			if (!arg)  return -EINVAL;
 			if (MINOR(inode->i_rdev) & 0x3F) return -EINVAL;
 			if (hd_ident_info[dev] == NULL)  return -ENOMSG;
@@ -1020,22 +1034,14 @@ static void hd_geninit(void)
 	}
 	i = NR_HD;
 	while (i-- > 0) {
-		hd[i<<6].nr_sects = 0;
-		if (bios_info[i].head > 16) {
-			/*
-			 * The newer E-IDE BIOSs handle drives larger than 1024
-			 * cylinders by increasing the number of logical heads
-			 * to keep the number of logical cylinders below the
-			 * sacred INT13 limit of 1024 (10 bits).  If that is
-			 * what's happening here, we'll find out and correct
-			 * it later when "identifying" the drive.
-			 */
-			printk("hd.c: IDE/ST-506 disk with more than 16 heads detected.\n");
-			printk("  (hd%c: cyl=%d, sect=%d, head=%d)\n", i+'a',
-				bios_info[i].cyl,
-				bios_info[i].sect,
-				bios_info[i].head);
-		}
+		/*
+		 * The newer E-IDE BIOSs handle drives larger than 1024
+		 * cylinders by increasing the number of logical heads
+		 * to keep the number of logical cylinders below the
+		 * sacred INT13 limit of 1024 (10 bits).  If that is
+		 * what's happening here, we'll find out and correct
+		 * it later when "identifying" the drive.
+		 */
 		hd[i<<6].nr_sects = bios_info[i].head *
 				bios_info[i].sect * bios_info[i].cyl;
 		hd_ident_info[i] = (struct hd_driveid *) kmalloc(512,GFP_KERNEL);
@@ -1043,7 +1049,7 @@ static void hd_geninit(void)
 	}
 	if (NR_HD) {
 		if (request_irq(HD_IRQ, hd_interrupt, SA_INTERRUPT, "hd")) {
-			printk("hd.c: unable to get IRQ%d for the harddisk driver\n",HD_IRQ);
+			printk("hd: unable to get IRQ%d for the harddisk driver\n",HD_IRQ);
 			NR_HD = 0;
 		}
 	}
@@ -1069,7 +1075,7 @@ static struct file_operations hd_fops = {
 unsigned long hd_init(unsigned long mem_start, unsigned long mem_end)
 {
 	if (register_blkdev(MAJOR_NR,"hd",&hd_fops)) {
-		printk("Unable to get major %d for harddisk\n",MAJOR_NR);
+		printk("hd: unable to get major %d for harddisk\n",MAJOR_NR);
 		return mem_start;
 	}
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;

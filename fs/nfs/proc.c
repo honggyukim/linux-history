@@ -77,10 +77,10 @@ static int nfs_stat_to_errno(int stat);
 
 static inline int *nfs_rpc_alloc(int size)
 {
-#if 1
+#if 0
 	/* Allow for the NFS crap as well as buffer */
 	return (int *)kmalloc(size+NFS_SLACK_SPACE,GFP_KERNEL);
-#else
+#else 
 	/* If kmalloc fails, then we will give an EIO to user level.
 	   (Please correct me, I am wron here... ??) This is not
 	   desirable, but it is also not desirable to execute the
@@ -88,7 +88,7 @@ static inline int *nfs_rpc_alloc(int size)
 	   so that other processes are run inbetween (and hopefully give
 	   some memory back).		Florian
 	*/
-	int i;
+	int *i;
 
 	while (!(i = (int *)kmalloc(size+NFS_SLACK_SPACE,GFP_KERNEL))) {
 		/* printk("NFS: call schedule\n"); */

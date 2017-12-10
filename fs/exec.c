@@ -60,9 +60,16 @@ static int aout_core_dump(long signr, struct pt_regs * regs);
  * Here are the actual binaries that will be accepted:
  * add more with "register_binfmt()"..
  */
+extern struct linux_binfmt elf_format;
+
 static struct linux_binfmt aout_format = {
-	NULL, NULL, load_aout_binary, load_aout_library, aout_core_dump
+#ifndef CONFIG_BINFMT_ELF
+ 	NULL, NULL, load_aout_binary, load_aout_library, aout_core_dump
+#else
+ 	&elf_format, NULL, load_aout_binary, load_aout_library, aout_core_dump
+#endif
 };
+
 static struct linux_binfmt *formats = &aout_format;
 
 int register_binfmt(struct linux_binfmt * fmt)
@@ -624,12 +631,8 @@ restart_interp:
 		bprm.e_uid = (i & S_ISUID) ? bprm.inode->i_uid : current->euid;
 		bprm.e_gid = (i & S_ISGID) ? bprm.inode->i_gid : current->egid;
 	}
-	if (current->euid == bprm.inode->i_uid)
-		i >>= 6;
-	else if (in_group_p(bprm.inode->i_gid))
-		i >>= 3;
-	if (!(i & 1) &&
-	    !((bprm.inode->i_mode & 0111) && suser())) {
+	if (!permission(bprm.inode, MAY_EXEC) ||
+	    (!(bprm.inode->i_mode & 0111) && fsuser())) {
 		retval = -EACCES;
 		goto exec_error2;
 	}
