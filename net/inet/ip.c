@@ -60,6 +60,9 @@
  *		Alan Cox	:	RAW sockets demultiplex in the BSD style.
  *		Gunther Mayer	:	Fix the SNMP reporting typo
  *		Alan Cox	:	Always in group 224.0.0.1
+ *		Alan Cox	:	Multicast loopback error for 224.0.0.1
+ *		Alan Cox	:	IP_MULTICAST_LOOP option.
+ *		Alan Cox	:	Use notifiers.
  *
  * To Fix:
  *		IP option processing is mostly not needed. ip_forward needs to know about routing rules
@@ -85,12 +88,15 @@
 #include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/errno.h>
+#include <linux/config.h>
+
 #include <linux/socket.h>
 #include <linux/sockios.h>
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+
 #include "snmp.h"
 #include "ip.h"
 #include "protocol.h"
@@ -120,12 +126,6 @@ extern void sort_send(struct sock *sk);
 struct ip_mib ip_statistics={1,64,};	/* Forwarding=Yes, Default TTL=64 */
 #else
 struct ip_mib ip_statistics={0,64,};	/* Forwarding=No, Default TTL=64 */
-#endif
-
-#ifdef CONFIG_IP_MULTICAST
-
-struct ip_mc_list *ip_mc_head=NULL;
-
 #endif
 
 /*
@@ -1923,9 +1923,6 @@ void ip_queue_xmit(struct sock *sk, struct device *dev,
 
 		/* Interrupt restore */
 		restore_flags(flags);
-		/* Set the IP write timeout to the round trip time for the packet.
-		   If an acknowledge has not arrived by then we may wish to act */
-		reset_timer(sk, TIME_WRITE, sk->rto);
 	}
 	else
 		/* Remember who owns the buffer */
@@ -1950,7 +1947,7 @@ void ip_queue_xmit(struct sock *sk, struct device *dev,
 	{
 		if(sk==NULL || sk->ip_mc_loop)
 		{
-			if(skb->daddr==IGMP_ALL_HOSTS)
+			if(iph->daddr==IGMP_ALL_HOSTS)
 				ip_loopback(dev,skb);
 			else
 			{
@@ -2017,26 +2014,34 @@ int ip_mc_procinfo(char *buffer, char **start, off_t offset, int length)
 	struct ip_mc_list *im;
 	unsigned long flags;
 	int len=0;
+	struct device *dev;
 	
-	
-	len=sprintf(buffer,"Device    : Multicast\n");  
+	len=sprintf(buffer,"Device    : Count\tGroup    Users Timer\n");  
 	save_flags(flags);
 	cli();
 	
-	im=ip_mc_head;
-	
-	while(im!=NULL)
+	for(dev = dev_base; dev; dev = dev->next)
 	{
-		len+=sprintf(buffer+len,"%-10s: %08lX\n", im->interface->name, im->multiaddr);
-		pos=begin+len;
-		if(pos<offset)
-		{
-			len=0;
-			begin=pos;
-		}
-		if(pos>offset+length)
-			break;
-		im=im->next;
+                if((dev->flags&IFF_UP)&&(dev->flags&IFF_MULTICAST))
+                {
+                        len+=sprintf(buffer+len,"%-10s: %5d\n",
+					dev->name, dev->mc_count);
+                        for(im = dev->ip_mc_list; im; im = im->next)
+                        {
+                                len+=sprintf(buffer+len,
+					"\t\t\t%08lX %5d %d:%08lX\n",
+                                        im->multiaddr, im->users,
+					im->tm_running, im->timer.expires);
+                                pos=begin+len;
+                                if(pos<offset)
+                                {
+                                        len=0;
+                                        begin=pos;
+                                }
+                                if(pos>offset+length)
+                                        break;
+                        }
+                }
 	}
 	restore_flags(flags);
 	*start=buffer+(offset-begin);
@@ -2405,12 +2410,28 @@ int ip_getsockopt(struct sock *sk, int level, int optname, char *optval, int *op
 static struct packet_type ip_packet_type =
 {
 	0,	/* MUTTER ntohs(ETH_P_IP),*/
-	0,		/* copy */
+	NULL,	/* All devices */
 	ip_rcv,
 	NULL,
 	NULL,
 };
 
+/*
+ *	Device notifier
+ */
+ 
+static int ip_rt_event(unsigned long event, void *ptr)
+{
+	if(event==NETDEV_DOWN)
+		ip_rt_flush(ptr);
+	return NOTIFY_DONE;
+}
+
+struct notifier_block ip_rt_notifier={
+	ip_rt_event,
+	NULL,
+	0
+};
 
 /*
  *	IP registers the packet type and then calls the subprotocol initialisers
@@ -2420,6 +2441,9 @@ void ip_init(void)
 {
 	ip_packet_type.type=htons(ETH_P_IP);
 	dev_add_pack(&ip_packet_type);
+
+	/* So we flush routes when a device is downed */	
+	register_netdevice_notifier(&ip_rt_notifier);
 /*	ip_raw_init();
 	ip_packet_init();
 	ip_tcp_init();

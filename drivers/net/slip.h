@@ -10,12 +10,25 @@
  *		Alan Cox	: 	Added slip mtu field.
  *		Matt Dillon	:	Printable slip (borrowed from net2e)
  *		Alan Cox	:	Added SL_SLIP_LOTS
- * 	Dmitry Gorodchanin      :       A lot of changes in the 'struct slip'
+ *	Dmitry Gorodchanin	:	A lot of changes in the 'struct slip'
+ *	Dmitry Gorodchanin	:	Added CSLIP statistics.
  *
  * Author:	Fred N. van Kempen, <waltje@uwalt.nl.mugnet.org>
  */
 #ifndef _LINUX_SLIP_H
 #define _LINUX_SLIP_H
+
+#include <linux/config.h>
+
+#if defined(CONFIG_INET) && defined(CONFIG_SLIP_COMPRESSED)
+# define SL_INCLUDE_CSLIP
+#endif
+
+#ifdef SL_INCLUDE_CSLIP
+# define SL_MODE_DEFAULT SL_MODE_ADAPTIVE
+#else
+# define SL_MODE_DEFAULT SL_MODE_SLIP
+#endif
 
 /* SLIP configuration. */
 #ifndef SL_SLIP_LOTS
@@ -38,7 +51,7 @@ struct slip {
   /* Various fields. */
   struct tty_struct	*tty;		/* ptr to TTY structure		*/
   struct device		*dev;		/* easy for intr handling	*/
-#if defined(CONFIG_INET)
+#ifdef SL_INCLUDE_CSLIP
   struct slcompress	*slcomp;	/* for header compression 	*/
   unsigned char		*cbuff;		/* compression buffer		*/
 #endif
@@ -58,6 +71,11 @@ struct slip {
   unsigned long         rx_dropped;     /* No memory for skb            */
   unsigned long         tx_dropped;     /* When MTU change              */
   unsigned long         rx_over_errors; /* Frame bigger then SLIP buf.  */
+#ifdef SL_INCLUDE_CSLIP
+  unsigned long		tx_compressed;
+  unsigned long		rx_compressed;
+  unsigned long		tx_misses;
+#endif
   /* Detailed SLIP statistics. */
 
   int			mtu;		/* Our mtu (to spot changes!)   */
@@ -81,19 +99,6 @@ struct slip {
 #define SL_MODE_ADAPTIVE 8
 };
 
-#ifdef CONFIG_INET
-#ifdef CONFIG_SLIP_ADAPTIVE
-#define SL_MODE_DEFAULT	SL_MODE_ADAPTIVE
-#else  /* !CONFIG_SLIP_ADAPTIVE */
-#ifdef CONFIG_SLIP_COMPRESSED
-#define SL_MODE_DEFAULT (SL_MODE_CSLIP | SL_MODE_ADAPTIVE)
-#else  /* !CONFIG_SLIP_COMPRESSED */
-#define SL_MODE_DEFAULT SL_MODE_SLIP
-#endif /* CONFIG_SLIP_COMPRESSED */
-#endif /* CONFIG_SLIP_ADAPTIVE */
-#else  /* !CONFIG_INET */
-#define SL_MODE_DEFAULT SL_MODE_SLIP
-#endif /* CONFIG_INET */
 
 
 #define SLIP_MAGIC 0x5302

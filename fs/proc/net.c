@@ -30,6 +30,7 @@
 #include <linux/sched.h>
 #include <linux/proc_fs.h>
 #include <linux/stat.h>
+#include <linux/config.h>
 
 /* forward references */
 static int proc_readnet(struct inode * inode, struct file * file,
@@ -169,6 +170,7 @@ static int proc_lookupnet(struct inode * dir,const char * name, int len,
 			return -ENOENT;
 		return 0;
 	}
+	iput(dir);
 	return -ENOENT;
 }
 

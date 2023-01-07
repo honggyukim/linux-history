@@ -11,6 +11,12 @@
 LINKFLAGS = -non_shared -T 0xfffffc0000304000 -N
 CFLAGS := $(CFLAGS) -mno-fp-regs
 
+HEAD := arch/alpha/kernel/head.o
+
+SUBDIRS := $(SUBDIRS) arch/alpha/kernel arch/alpha/lib
+ARCHIVES := arch/alpha/kernel/kernel.o $(ARCHIVES)
+LIBS := arch/alpha/lib/lib.a $(LIBS)
+
 archclean:
 
 archdep:

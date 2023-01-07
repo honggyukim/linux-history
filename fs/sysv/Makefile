@@ -7,10 +7,6 @@
 #
 # Note 2! The CFLAGS definitions are now in the main makefile...
 
-ifndef CONFIG_SYSV_FS
-CFLAGS := $(CFLAGS) -DMODULE
-endif
-
 .c.s:
 	$(CC) $(CFLAGS) -S $<
 .c.o:
@@ -24,6 +20,7 @@ OBJS=	ialloc.o balloc.o inode.o file.o dir.o symlink.o namei.o \
 sysv.o: $(OBJS)
 	$(LD) -r -o sysv.o $(OBJS)
 
+modules: sysv.o
 dep:
 	$(CPP) -M *.c > .depend
 

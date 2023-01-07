@@ -7,10 +7,6 @@
 #
 # Note 2! The CFLAGS definitions are now in the main makefile...
 
-ifndef CONFIG_ISO9660_FS
-CFLAGS := $(CFLAGS) -DMODULE
-endif
-
 .c.s:
 	$(CC) $(CFLAGS) -S $<
 .c.o:
@@ -23,6 +19,7 @@ OBJS=	namei.o inode.o file.o dir.o util.o rock.o symlink.o
 isofs.o: $(OBJS)
 	$(LD) -r -o isofs.o $(OBJS)
 
+modules: isofs.o
 dep:
 	$(CPP) -M *.c > .depend
 

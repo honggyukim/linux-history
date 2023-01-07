@@ -7,10 +7,6 @@
 #
 # Note 2! The CFLAGS definitions are now in the main makefile...
 
-ifndef CONFIG_XIA_FS
-CFLAGS := $(CFLAGS) -DMODULE
-endif
-
 .c.s:
 	$(CC) $(CFLAGS) -S $<
 .c.o:
@@ -23,6 +19,8 @@ OBJS=	bitmap.o truncate.o namei.o inode.o \
 
 xiafs.o: $(OBJS)
 	$(LD) -r -o xiafs.o $(OBJS)
+
+modules: xiafs.o
 
 dep:
 	$(CPP) -M *.c > .depend

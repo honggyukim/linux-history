@@ -17,7 +17,7 @@ CPP := $(CPP) -I../../net/inet
 
 
 # The point of the makefile...
-all: net.a modules
+all: net.a
 
 Space.o: Space.c ../../include/linux/autoconf.h
 	$(CC) $(CFLAGS) $(OPTS) -c $<
@@ -192,16 +192,10 @@ tar:
 
 ifdef MODULES
 
-modules:
+modules: $(MODULES)
 	echo $(MODULES) > ../../modules/NET_MODULES
-	@(cd ../../modules; \
-		for i in $(MODULES:.o=.c); \
-			do ln -sf ../drivers/net/$$i .; \
-			done ; \
-		ln -sf ../drivers/net/CONFIG . ; \
-		$(MAKE) -f../drivers/net/Makefile -I../drivers/net \
-			CFLAGS="$(CFLAGS) -I../net/inet -I../drivers/net -DMODULE" $(MODULES); \
-		rm $(MODULES:.o=.c) CONFIG)
+	cd ../../modules; \
+		for i in $(MODULES); do ln -sf ../drivers/net/$$i .; done
 
 else
 
